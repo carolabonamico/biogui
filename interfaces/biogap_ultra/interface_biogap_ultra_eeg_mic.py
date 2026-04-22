@@ -37,20 +37,20 @@ EEG_PACKET_SIZE = 211
 
 MIC_HEADER = 0xAA
 MIC_TRAILER = 0x55
-MIC_PACKET_SIZE = 132
+MIC_PACKET_SIZE = 136
 
 
 packetSize = [(EEG_HEADER, EEG_PACKET_SIZE), (MIC_HEADER, MIC_PACKET_SIZE)]
 """List of (header_byte, packet_size) tuples for EEG and MIC packets."""
 
-startSeq: list[bytes] = [
+startSeq: list[bytes | float] = [
     (18).to_bytes(),  # START_EEG_STREAMING command
     0.2,  # Wait 200 ms
     (26).to_bytes(),  # START_MIC_STREAMING command
 ]
 """Sequence of commands to start EEG and microphone streaming."""
 
-stopSeq: list[bytes] = [
+stopSeq: list[bytes | float] = [
     (19).to_bytes(),  # STOP_EEG_STREAMING command
     0.2,  # Wait 200 ms
     (27).to_bytes(),  # STOP_MIC_STREAMING command
@@ -68,11 +68,13 @@ sigInfo: dict = {
     "mic_eeg": {"fs": SAMPLE_RATE_MIC, "nCh": 1},
     "counter_eeg": {"fs": SAMPLE_RATE_EEG / SAMPLES_PER_PACKET_EEG, "nCh": 1},
     "counter_mic_eeg": {"fs": SAMPLE_RATE_MIC / SAMPLES_PER_PACKET_MIC, "nCh": 1},
+    "timestamp_eeg": {"fs": SAMPLE_RATE_EEG / SAMPLES_PER_PACKET_EEG, "nCh": 1},
+    "timestamp_mic_eeg": {"fs": SAMPLE_RATE_MIC / SAMPLES_PER_PACKET_MIC, "nCh": 1},
 }
 """Dictionary containing the signals information."""
 
 
-def _decode_eeg(data: bytes) -> np.ndarray:
+def _decode_eeg(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode EEG packet.
     Packet structure (211 bytes total):
     - 1 byte: Header (0x55)
@@ -94,11 +96,14 @@ def _decode_eeg(data: bytes) -> np.ndarray:
     nBit = 24
 
     counter = bytearray(data[1:3])
-
     # Cast the counter to np.int32
     counter = np.asarray(struct.unpack("<H", counter), dtype=np.int32)
     counter = counter.reshape(1, 1)
-    
+
+    timestamp = bytearray(data[3:7])
+    timestamp = np.asarray(struct.unpack("<I", timestamp), dtype=np.int32)
+    timestamp = timestamp.reshape(1, 1)
+
     dataADSATmp = bytearray(
         data[7:31] + data[57:81] + data[107:131] + data[157:181]
     )
@@ -125,14 +130,15 @@ def _decode_eeg(data: bytes) -> np.ndarray:
     eeg = eegAllChannels * (vRef / (gain * (2 ** (nBit - 1) - 1)))
     eeg *= 10e6  # uV
     eeg = eeg.astype(np.float32)
-    return eeg, counter
+    return eeg, counter, timestamp
 
 
-def _decode_mic(data: bytes) -> np.ndarray:
+def _decode_mic(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode microphone packet.
-    Packet structure (132 bytes total):
+    Packet structure (136 bytes total):
     - 1 byte header (0xAA)
     - 2 byte counter
+    - 4 bytes: Timestamp (microseconds, for cross-packet synchronization)
     - 64 samples of 16-bit signed audio data (128 bytes)
     - 1 byte trailer (0x55)
     """
@@ -140,7 +146,11 @@ def _decode_mic(data: bytes) -> np.ndarray:
     counter = np.asarray(struct.unpack("<H", counter), dtype=np.int32)
     counter = counter.reshape(1, 1)
 
-    audio_data = data[3:3 + SAMPLES_PER_PACKET_MIC * 2] 
+    timestamp = bytearray(data[3:7])
+    timestamp = np.asarray(struct.unpack("<I", timestamp), dtype=np.int32)
+    timestamp = timestamp.reshape(1, 1)
+
+    audio_data = data[7:7 + SAMPLES_PER_PACKET_MIC * 2]
 
     # Unpack 16-bit signed samples (little-endian)
     audio = np.array(
@@ -154,10 +164,10 @@ def _decode_mic(data: bytes) -> np.ndarray:
     # Convert to float32 normalized to [-1.0, 1.0] range
     audio = audio.astype(np.float32) / 32768.0
 
-    return audio, counter
+    return audio, counter, timestamp
 
 
-def decodeFn(data: bytes) -> dict[str, np.ndarray]:
+def decodeFn(data: bytes) -> dict[str, np.ndarray | None]:
     """
     Function to decode binary data received from BioGAP.
 
@@ -168,14 +178,14 @@ def decodeFn(data: bytes) -> dict[str, np.ndarray]:
     Parameters
     ----------
     data : bytes
-        A packet of either 132 bytes (MIC) or 211 bytes (EEG).
+        A packet of either 136 bytes (MIC) or 211 bytes (EEG).
 
     Returns
     -------
     dict[str, np.ndarray]
         Dictionary containing the decoded signals:
-        - For mic packets: {"eeg": empty, "mic_eeg": mic_data, "counter_eeg": None, "counter_mic_eeg": mic_counter}
-        - For EEG packets: {"eeg": eeg_data, "mic_eeg": empty, "counter_eeg": eeg_counter, "counter_mic_eeg": None}
+        - For mic packets: {"eeg": empty, "mic_eeg": mic_data, "counter_eeg": None, "counter_mic_eeg": mic_counter, "timestamp_eeg": None, "timestamp_mic_eeg": mic_timestamp}
+        - For EEG packets: {"eeg": eeg_data, "mic_eeg": empty, "counter_eeg": eeg_counter, "counter_mic_eeg": None, "timestamp_eeg": eeg_timestamp, "timestamp_mic_eeg": None}
     """
     packet_len = len(data)
     header = data[0]
@@ -184,14 +194,14 @@ def decodeFn(data: bytes) -> dict[str, np.ndarray]:
         trailer = data[-1]
         if trailer != MIC_TRAILER:
             raise ValueError(f"Invalid mic trailer: 0x{trailer:02X}, expected 0x{MIC_TRAILER:02X}")
-        audio, counter = _decode_mic(data)
-        return {"eeg": None, "counter_eeg": None, "mic_eeg": audio, "counter_mic_eeg": counter}
+        audio, counter, timestamp = _decode_mic(data)
+        return {"eeg": None, "counter_eeg": None, "mic_eeg": audio, "counter_mic_eeg": counter, "timestamp_eeg": None, "timestamp_mic_eeg": timestamp}
     elif packet_len == EEG_PACKET_SIZE and header == EEG_HEADER:
         # This is an EEG packet
         trailer = data[-1]
         if trailer != EEG_TRAILER:
             raise ValueError(f"Invalid EEG trailer: 0x{trailer:02X}, expected 0x{EEG_TRAILER:02X}")
-        eeg, counter = _decode_eeg(data)
-        return {"eeg": eeg, "counter_eeg": counter, "mic_eeg": None, "counter_mic_eeg": None}
+        eeg, counter, timestamp = _decode_eeg(data)
+        return {"eeg": eeg, "counter_eeg": counter, "mic_eeg": None, "counter_mic_eeg": None, "timestamp_eeg": timestamp, "timestamp_mic_eeg": None}
     else:
         raise ValueError(f"Invalid packet: size={packet_len}, header=0x{header:02X}")

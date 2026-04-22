@@ -43,14 +43,14 @@ MIC_PACKET_SIZE = 136
 packetSize = [(EMG_HEADER, EMG_PACKET_SIZE), (MIC_HEADER, MIC_PACKET_SIZE)]
 """List of (header_byte, packet_size) tuples for EMG and MIC packets."""
 
-startSeq: list[bytes] = [
+startSeq: list[bytes | float] = [
     (37).to_bytes(),  # START_EMG_STREAMING command
     0.2,  # Wait 200 ms
     (26).to_bytes(),  # START_MIC_STREAMING command
 ]
 """Sequence of commands to start EMG and microphone streaming."""
 
-stopSeq: list[bytes] = [
+stopSeq: list[bytes | float] = [
     (38).to_bytes(),  # STOP_EMG_STREAMING command
     0.2,  # Wait 200 ms
     (27).to_bytes(),  # STOP_MIC_STREAMING command
@@ -74,7 +74,7 @@ sigInfo: dict = {
 """Dictionary containing the signals information."""
 
 
-def _decode_emg(data: bytes) -> np.ndarray:
+def _decode_emg(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode EMG packet.
     Packet structure (211 bytes total):
     - 1 byte: Header (0x55)
@@ -133,7 +133,7 @@ def _decode_emg(data: bytes) -> np.ndarray:
     return emg, counter, timestamp
 
 
-def _decode_mic(data: bytes) -> np.ndarray:
+def _decode_mic(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Decode microphone packet.
     Packet structure (136 bytes total):
     - 1 byte header (0xAA)
@@ -166,7 +166,7 @@ def _decode_mic(data: bytes) -> np.ndarray:
     return audio, counter, timestamp
 
 
-def decodeFn(data: bytes) -> dict[str, np.ndarray]:
+def decodeFn(data: bytes) -> dict[str, np.ndarray | None]:
     """
     Function to decode binary data received from BioGAP.
 
