@@ -18,7 +18,7 @@ if str(ROOT_DIR) not in sys.path:
 from utils.read_bio_file import read_bio_file
 
 
-CONFIG_PATH = Path(__file__).with_name("plot_config.json")
+CONFIG_PATH = Path(__file__).parent/"config"/"plot_config.json"
 
 
 def _load_signal_filters(config_path: Path) -> dict[str, dict]:
@@ -164,6 +164,33 @@ def _color_nan_regions(ax, t: np.ndarray, data: np.ndarray) -> None:
         ax.axvspan(x0, x1, color="red", alpha=0.18, zorder=0)
 
 
+def _plot_signal_on_axis(ax, sig_name: str, sig_data: dict, xlabel: bool = True) -> None:
+    """Plot a signal on a specific axis handling single and multi-channel data."""
+    n_samp, n_ch = sig_data["data"].shape
+    data = np.asarray(sig_data["data"], dtype=np.float64)
+    t = np.arange(n_samp) / sig_data["fs"]
+
+    ax.set_title(sig_name)
+    if xlabel:
+        ax.set_xlabel("Time [s]")
+    _color_nan_regions(ax, t, data)
+
+    if n_ch > 1:
+        spacing = _compute_channel_spacing(data)
+        offsets = np.arange(n_ch) * spacing
+        for i in range(n_ch):
+            channel = _center_finite_runs(data[:, i])
+            ax.plot(t, channel + offsets[i])
+
+        ax.set_yticks(offsets)
+        ax.set_yticklabels([f"Ch {i + 1}" for i in range(n_ch)])
+        ax.set_ylabel("Channels")
+    else:
+        ax.plot(t, data[:, 0], label="Ch 1")
+        ax.set_ylabel("Amplitude")
+        ax.legend(loc="upper right")
+
+
 # --------------------------------------------
 # Main
 # --------------------------------------------
@@ -190,31 +217,33 @@ def main():
                     filter_list=sig_cfg["filters"],
                 )
 
-    # Plot
+    # Plot each signal individually
     for sig_name, sig_data in signals.items():
-        n_samp, n_ch = sig_data["data"].shape
-        data = np.asarray(sig_data["data"], dtype=np.float64)
-
-        t = np.arange(n_samp) / sig_data["fs"]
         fig, ax = plt.subplots(figsize=(16, 6), layout="constrained")
         fig.suptitle(sig_name)
-        ax.set_xlabel("Time [s]")
-        _color_nan_regions(ax, t, data)
+        _plot_signal_on_axis(ax, sig_name, sig_data, xlabel=True)
 
-        if n_ch > 1:
-            spacing = _compute_channel_spacing(data)
-            offsets = np.arange(n_ch) * spacing
-            for i in range(n_ch):
-                channel = _center_finite_runs(data[:, i])
-                ax.plot(t, channel + offsets[i])
+    # Additional plot: top = base signal, bottom = matching mic_<base> signal
+    for mic_name, mic_data in signals.items():
+        if not mic_name.startswith("mic_"):
+            continue
 
-            ax.set_yticks(offsets)
-            ax.set_yticklabels([f"Ch {i + 1}" for i in range(n_ch)])
-            ax.set_ylabel("Channels")
-        else:
-            ax.plot(t, data[:, 0], label="Ch 1")
-            ax.set_ylabel("Amplitude")
-            ax.legend(loc="upper right")
+        base_name = mic_name[4:]
+        if base_name not in signals:
+            continue
+
+        base_data = signals[base_name]
+        fig, (ax_top, ax_bottom) = plt.subplots(
+            2,
+            1,
+            figsize=(16, 8),
+            layout="constrained",
+            sharex=True,
+        )
+        fig.suptitle(f"Combined: {base_name} / {mic_name} ")
+
+        _plot_signal_on_axis(ax_top, base_name, base_data, xlabel=False)
+        _plot_signal_on_axis(ax_bottom, mic_name, mic_data, xlabel=True)
 
     plt.show()
 
