@@ -46,7 +46,7 @@ def synchronize_bio_files(signals_a: dict, signals_b: dict) -> dict:
     for name, sig in signals_b.items():
         aligned_sig = {"fs": sig["fs"], "data": sig["data"].copy()}
 
-        if name.startswith("timestamp"):
+        if name == "timestamp":
             ts_b = aligned_sig["data"].reshape(-1)
 
             # Interpolate the offset across all samples; clamp outside range
