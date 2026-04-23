@@ -2,7 +2,6 @@
 File reading utilities for .bio files.
 """
 
-
 from __future__ import annotations
 import struct
 import numpy as np
@@ -10,18 +9,24 @@ import sys
 
 
 def _print_signal_info(signals: dict) -> None:
-    """Print basic information about the signals in the .bio file."""
-    print("Signals information:")
+    """Print basic information the signals in the .bio file."""
+    print("\nSignals information:")
+    print("-" * 20)
     for sig_name, sig_data in signals.items():
         data = sig_data["data"]
+        # first_5_values = data[:5]
+        
         print(
-            f"{sig_name}: fs={sig_data['fs']}, n_samp={data.shape[0]}, "
-            f"n_ch={data.shape[1]}, dtype={data.dtype}"
+            f"[{sig_name}]\n"
+            f"  fs     = {sig_data['fs']} Hz\n"
+            f"  n_samp = {data.shape[0]}\n"
+            f"  n_ch   = {data.shape[1] if data.ndim > 1 else 1}\n"
+            f"  dtype  = {data.dtype}\n"
+            # f"  First 5 values:\n{first_5_values}\n"
         )
 
 
 def read_bio_file(file_path: str) -> dict:
-
     """
     Read a .bio file and extract all signals, timestamps, and triggers.
     """
@@ -88,6 +93,10 @@ def read_bio_file(file_path: str) -> dict:
             itemsize = 4    # saving as uint32_t
             trigger = np.frombuffer(f.read(itemsize * n_samp_base), dtype=np.uint32).reshape(n_samp_base, 1)
             signals["trigger"] = {"data": trigger, "fs": fs_base}
+            minus_one_uint32 = np.iinfo(np.uint32).max 
+            
+            # unique_triggers = np.unique(trigger)
+            # print(f"Unique trigger values: {unique_triggers}")
 
         # # 4. Trigger string (len-prefixed UTF-8 per sample)
         # if is_trigger_str:
@@ -106,13 +115,15 @@ def read_bio_file(file_path: str) -> dict:
         #         "fs": fs_base,
         #     }
     
-    # _print_signal_info(signals)
-
     return signals
 
+
 if __name__ == "__main__":
+    
     if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <path_to_bio_file>")
+        print(f"Usage: python {sys.argv[0]} <path_to_bio_file>")
         sys.exit(1)
 
     signals = read_bio_file(sys.argv[1])
+    
+    _print_signal_info(signals)

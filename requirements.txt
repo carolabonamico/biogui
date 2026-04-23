@@ -7,3 +7,4 @@ scipy
 shiboken6
 mkdocs-material
 mkdocs-glightbox
+matplotlib
