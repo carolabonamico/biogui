@@ -10,7 +10,8 @@
       "filters": [
         {"type": "highpass", "cutoff": 20.0, "order": 4},
         {"type": "notch", "freq": 50.0, "q": 30}
-      ]
+      ],
+      "exclude_channels": [11, 12]
     }
   }
 }

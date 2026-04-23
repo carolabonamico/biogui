@@ -121,6 +121,38 @@ def _apply_filters_nan(data: np.ndarray, fs: float, filter_list: list[dict]) -> 
     return out
 
 
+def _get_kept_channel_ids(n_ch: int, exclude_channels: list[int]) -> list[int]:
+    """Return channel indices that should be kept after applying exclusions."""
+    excluded = set()
+    for channel_idx in exclude_channels:
+        try:
+            idx = int(channel_idx)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < n_ch:
+            excluded.add(idx)
+
+    return [idx for idx in range(n_ch) if idx not in excluded]
+
+
+def _apply_channel_exclusions(signals: dict[str, dict], signal_cfg: dict[str, dict]) -> None:
+    """Apply channel exclusions from config to every matching signal."""
+    for sig_name, sig_data in signals.items():
+        data = np.asarray(sig_data["data"])
+        if data.ndim != 2:
+            continue
+
+        cfg = signal_cfg.get(sig_name, {})
+        exclude_channels = cfg.get("exclude_channels")
+        if not exclude_channels:
+            sig_data["channel_ids"] = list(range(data.shape[1]))
+            continue
+
+        kept_ids = _get_kept_channel_ids(data.shape[1], exclude_channels)
+        sig_data["data"] = data[:, kept_ids]
+        sig_data["channel_ids"] = kept_ids
+
+
 # --------------------------------------------
 # Plot preparation utilities
 # --------------------------------------------
@@ -168,6 +200,10 @@ def _plot_signal_on_axis(ax, sig_name: str, sig_data: dict, xlabel: bool = True)
     """Plot a signal on a specific axis handling single and multi-channel data."""
     n_samp, n_ch = sig_data["data"].shape
     data = np.asarray(sig_data["data"], dtype=np.float64)
+    channel_ids = sig_data.get("channel_ids", list(range(n_ch)))
+    if len(channel_ids) != n_ch:
+        channel_ids = list(range(n_ch))
+
     t = np.arange(n_samp) / sig_data["fs"]
 
     ax.set_title(sig_name)
@@ -183,10 +219,10 @@ def _plot_signal_on_axis(ax, sig_name: str, sig_data: dict, xlabel: bool = True)
             ax.plot(t, channel + offsets[i])
 
         ax.set_yticks(offsets)
-        ax.set_yticklabels([f"Ch {i + 1}" for i in range(n_ch)])
+        ax.set_yticklabels([f"Ch {channel_ids[i]}" for i in range(n_ch)])
         ax.set_ylabel("Channels")
     else:
-        ax.plot(t, data[:, 0], label="Ch 1")
+        ax.plot(t, data[:, 0], label=f"Ch {channel_ids[0]}")
         ax.set_ylabel("Amplitude")
         ax.legend(loc="upper right")
 
@@ -210,12 +246,16 @@ def main():
     # Apply filters if requested and if the signal is in the config
     if args.filter:
         for sig_name, sig_cfg in signal_filters.items():
-            if sig_name in signals:
+            filter_list = sig_cfg.get("filters")
+            if sig_name in signals and filter_list:
                 signals[sig_name]["data"] = _apply_filters_nan(
                     data=signals[sig_name]["data"],
                     fs=signals[sig_name]["fs"],
-                    filter_list=sig_cfg["filters"],
+                    filter_list=filter_list,
                 )
+
+    # Apply channel exclusions defined per signal in the config.
+    _apply_channel_exclusions(signals, signal_filters)
 
     # Plot each signal individually
     for sig_name, sig_data in signals.items():
