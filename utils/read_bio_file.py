@@ -12,9 +12,10 @@ def _print_signal_info(signals: dict) -> None:
     """Print basic information the signals in the .bio file."""
     print("\nSignals information:")
     print("-" * 20)
+    
     for sig_name, sig_data in signals.items():
         data = sig_data["data"]
-        # first_5_values = data[:5]
+        first_5_values = data[-5:]
         
         print(
             f"[{sig_name}]\n"
@@ -22,8 +23,12 @@ def _print_signal_info(signals: dict) -> None:
             f"  n_samp = {data.shape[0]}\n"
             f"  n_ch   = {data.shape[1] if data.ndim > 1 else 1}\n"
             f"  dtype  = {data.dtype}\n"
-            # f"  First 5 values:\n{first_5_values}\n"
+            f"  Last 5 values:\n{first_5_values}\n"
         )
+    
+    temg = signals["timestamp_emg"]["data"].ravel()[-1]
+    tmic = signals["timestamp_mic_emg"]["data"].ravel()[-1]
+    print(f"\nLast timestamp difference = timestamp_emg - timestamp_mic_emg = {temg - tmic} microseconds")
 
 
 def read_bio_file(file_path: str) -> dict:
@@ -126,4 +131,4 @@ if __name__ == "__main__":
 
     signals = read_bio_file(sys.argv[1])
     
-    _print_signal_info(signals)
+    # _print_signal_info(signals)
