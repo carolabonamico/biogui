@@ -24,7 +24,7 @@ def extract_trigger_times(signals: dict) -> np.ndarray:
     return timestamp[onset_idx]
 
 
-def synchronize_bio_files(signals_a: dict, signals_b: dict) -> dict:
+def synchronize_bio_files(signals_a: dict, signals_b: dict, debug: bool = False) -> dict:
     """
     Aligns File B to File A using matched trigger timestamps.
     The clock drift is interpolated between consecutive trigger pairs.
@@ -37,10 +37,18 @@ def synchronize_bio_files(signals_a: dict, signals_b: dict) -> dict:
             f"Trigger count mismatch: File A has {len(times_a)}, File B has {len(times_b)}."
         )
 
-    # print(f"Triggers found: {len(times_a)}")
-
     # Local clock offset at each trigger pair: how much B is ahead/behind A
     local_offsets = times_a - times_b
+
+    if debug:
+        print(f"[DEBUG][INTER] Trigger counts: A={len(times_a)}, B={len(times_b)}")
+        if len(times_a) > 0:
+            print(
+                "[DEBUG][INTER] Offset computed at rising edges before alignment (A-B): "
+                f"min={local_offsets.min():.3f}s, "
+                f"max={local_offsets.max():.3f}s, "
+                f"mean={local_offsets.mean():.3f}s"
+            )
 
     signals_b_aligned = {}
     for name, sig in signals_b.items():
@@ -55,6 +63,27 @@ def synchronize_bio_files(signals_a: dict, signals_b: dict) -> dict:
 
         signals_b_aligned[name] = aligned_sig
 
+    if debug and len(times_a) > 0:
+        times_b_aligned = extract_trigger_times(signals_b_aligned)
+        offsets_after = times_a - times_b_aligned
+
+        print(
+            "[DEBUG][INTER] Residual offset computed at rising edges after alignment (A-B_aligned): "
+            f"min={offsets_after.min():.3f}s, "
+            f"max={offsets_after.max():.3f}s, "
+            f"mean={offsets_after.mean():.3f}s, "
+        )
+
+        ts_a = signals_a["timestamp"]["data"].reshape(-1)
+        ts_b_aligned = signals_b_aligned["timestamp"]["data"].reshape(-1)
+        aligned_non_decreasing = bool(np.all(np.diff(ts_b_aligned) >= 0)) if ts_b_aligned.size > 1 else True
+        print(
+            "[DEBUG][INTER] Software timestamp delta: "
+            f"start={ts_a[0] - ts_b_aligned[0]:.3f}s, "
+            f"end={ts_a[-1] - ts_b_aligned[-1]:.3f}s"
+        )
+        print(f"[DEBUG][INTER] Aligned timestamp non-decreasing: {aligned_non_decreasing}")
+
     return signals_b_aligned
 
 
@@ -65,6 +94,11 @@ def main() -> None:
     parser.add_argument("file_a", help="Reference .bio file (its time grid is kept).")
     parser.add_argument("file_b", help="Secondary .bio file (its timestamps are mapped to file A).")
     parser.add_argument("output_dir", help="Directory where the aligned files are written.")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print detailed diagnostics for intra/inter alignment checks.",
+    )
     args = parser.parse_args()
 
     file_a = Path(args.file_a)
@@ -76,8 +110,8 @@ def main() -> None:
     signals_a = align_bio_signals(str(file_a))
     signals_b = align_bio_signals(str(file_b))
 
-    print("\nStep 2: inter-file synchronization (mapping clocks)")
-    signals_b_aligned = synchronize_bio_files(signals_a, signals_b)
+    print("\nStep 2: inter-file synchronization (mapping clocks)\n")
+    signals_b_aligned = synchronize_bio_files(signals_a, signals_b, debug=args.debug)
 
     print("\nStep 3: saving files")
     out_a = output_dir / f"{file_a.stem}_inter_aligned{file_a.suffix}"

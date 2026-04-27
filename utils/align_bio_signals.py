@@ -89,7 +89,7 @@ def _repair_counter_losses(signals: dict) -> None:
         original_dtype = counter_raw.dtype
 
         modulus = compute_counter_modulus(counter_raw, original_dtype)
-        unwrapped = unwrap_counter(counter_raw, original_dtype)
+        unwrapped = unwrap_counter(counter_raw, modulus)
 
         relative_indices = (unwrapped - unwrapped[0]).astype(np.int64)
         total_expected_packets = int(relative_indices[-1]) + 1
@@ -136,4 +136,4 @@ if __name__ == "__main__":
 
     aligned = align_bio_signals(str(input_bio))
     write_bio_file(str(output_bio), aligned)
-    print(f"Saved aligned signals to: {output_bio}")
+    print(f"[SAVED]: {output_bio}")

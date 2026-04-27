@@ -31,17 +31,19 @@ def compute_counter_modulus(counter: np.ndarray, dtype: np.dtype) -> int:
         return 2**64
 
 
-def unwrap_counter(counter_array: np.ndarray, dtype: np.dtype) -> np.ndarray:
-    """Unwrap a counter sequence into monotonic int64 values after computing the modulus."""
+def unwrap_counter(counter_array: np.ndarray, modulus: int) -> np.ndarray:
+    """Unwrap a counter sequence into monotonic int64 values using a provided modulus."""
     counter = np.asarray(counter_array).reshape(-1).astype(np.int64)
 
     if counter.size <= 1:
         return counter.copy()
+    if modulus <= 0:
+        raise ValueError(f"Counter modulus must be > 0, got {modulus}.")
 
-    modulus = np.int64(compute_counter_modulus(counter, dtype))
+    modulus_i64 = np.int64(modulus)
 
     diffs = np.diff(counter)
-    steps = diffs % modulus
+    steps = diffs % modulus_i64
     
     unwrapped = np.empty_like(counter)
     unwrapped[0] = counter[0]
@@ -56,7 +58,8 @@ def calculate_packet_loss(
     signal_name: str,
 ) -> tuple[int, int, list[tuple[str, int, int]]]:
     """Return (lost, received, missing_entries) for a counter signal."""
-    counter = unwrap_counter(counter_array, dtype)
+    modulus = compute_counter_modulus(np.asarray(counter_array).reshape(-1), dtype)
+    counter = unwrap_counter(counter_array, modulus)
 
     missing_entries: list[tuple[str, int, int]] = []
 
