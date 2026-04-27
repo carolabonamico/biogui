@@ -1,0 +1,31 @@
+{
+    "triggers": {
+        "move forward": "",
+        "turn left": "",
+        "turn right": "",
+        "stop the mission": "",
+        "go to the center": "",
+        "move inside": "",
+        "go to the wall": "",
+        "move backward": "",
+        "proceed to the door": "",
+        "back to initial position": "",
+        "enter the room": "",
+        "proceed two meters": "",
+        "pick up the object": "",
+        "put the object down": "",
+        "turn on the light": "",
+        "switch off the light": "",
+        "turn off the volume": "",
+        "stop right there": "",
+        "start the task": "",
+        "start the mission": ""
+
+    },
+    "nReps": 10,
+    "durationTrigger": 2500,
+    "durationStart": 5000,
+    "durationRest": 1500,
+    "imageFolder": "acquisitions/gestures_images", 
+    "shuffle" : true
+}
