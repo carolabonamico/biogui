@@ -101,7 +101,7 @@ def _decode_emg(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     counter = counter.reshape(1, 1)
 
     timestamp = bytearray(data[3:7])
-    timestamp = np.asarray(struct.unpack("<I", timestamp), dtype=np.int32)
+    timestamp = np.asarray(struct.unpack("<I", timestamp), dtype=np.uint32)
     timestamp = timestamp.reshape(1, 1)
     
     dataADSATmp = bytearray(
@@ -146,7 +146,7 @@ def _decode_mic(data: bytes) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     counter = counter.reshape(1, 1)
 
     timestamp = bytearray(data[3:7])
-    timestamp = np.asarray(struct.unpack("<I", timestamp), dtype=np.int32)
+    timestamp = np.asarray(struct.unpack("<I", timestamp), dtype=np.uint32)
     timestamp = timestamp.reshape(1, 1)
 
     audio_data = data[7:7 + SAMPLES_PER_PACKET_MIC * 2] 
