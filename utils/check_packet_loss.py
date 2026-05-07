@@ -14,31 +14,57 @@ if str(ROOT_DIR) not in sys.path:
 
 from utils.read_bio_file import read_bio_file
 
-def compute_counter_modulus(counter: np.ndarray, dtype: np.dtype) -> int:
-    """Infer counter rollover modulus from dtype and observed values."""
+def compute_modulus(signal: np.ndarray, dtype: np.dtype) -> int:
+    """Infer modulus from dtype and observed values."""
     dt = np.dtype(dtype)
 
     if dt.itemsize == 1:
         return 2**8
     if dt.itemsize == 2:
         return 2**16
-    elif dt.itemsize == 4:
-        # uint16 counters may be stored in int32 arrays.
-        if counter.size and int(counter.max()) <= 0xFFFF:
-            return 2**16
-        return 2**32
+    
+    signal_arr = np.asarray(signal).reshape(-1)
+    if signal_arr.size:
+        if np.issubdtype(signal_arr.dtype, np.floating):
+            finite = signal_arr[np.isfinite(signal_arr)]
+        else:
+            finite = signal_arr
     else:
+        finite = signal_arr
+
+    if dt.itemsize == 4:
+        # uint16 counters may be stored in int32 arrays.
+        if finite.size:
+            min_val = float(np.min(finite))
+            max_val = float(np.max(finite))
+            if min_val >= 0 and max_val <= 0xFFFF:
+                return 2**16
+        else:
+            return 2**32
+        return 2**32
+
+    if dt.itemsize >= 8:
+        if finite.size:
+            min_val = float(np.min(finite))
+            max_val = float(np.max(finite))
+            if min_val >= 0:
+                if max_val <= 0xFFFF:
+                    return 2**16
+                if max_val <= 0xFFFFFFFF:
+                    return 2**32
         return 2**64
 
+    return 2**64
 
-def unwrap_counter(counter_array: np.ndarray, modulus: int) -> np.ndarray:
-    """Unwrap a counter sequence into monotonic int64 values using a provided modulus."""
+
+def unwrap_signal(counter_array: np.ndarray, modulus: int) -> np.ndarray:
+    """Unwrap a sequence into monotonic int64 values using a provided modulus."""
     counter = np.asarray(counter_array).reshape(-1).astype(np.int64)
 
     if counter.size <= 1:
         return counter.copy()
     if modulus <= 0:
-        raise ValueError(f"Counter modulus must be > 0, got {modulus}.")
+        raise ValueError(f"Modulus must be > 0, got {modulus}.")
 
     modulus_i64 = np.int64(modulus)
 
@@ -58,8 +84,8 @@ def calculate_packet_loss(
     signal_name: str,
 ) -> tuple[int, int, list[tuple[str, int, int]]]:
     """Return (lost, received, missing_entries) for a counter signal."""
-    modulus = compute_counter_modulus(np.asarray(counter_array).reshape(-1), dtype)
-    counter = unwrap_counter(counter_array, modulus)
+    modulus = compute_modulus(np.asarray(counter_array).reshape(-1), dtype)
+    counter = unwrap_signal(counter_array, modulus)
 
     missing_entries: list[tuple[str, int, int]] = []
 

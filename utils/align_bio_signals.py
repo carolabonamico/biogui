@@ -7,7 +7,7 @@ import numpy as np
 from pathlib import Path
 from read_bio_file import read_bio_file
 from write_bio_file import write_bio_file
-from check_packet_loss import compute_counter_modulus, unwrap_counter
+from check_packet_loss import compute_modulus, unwrap_signal
 
 
 def _trim_signals(signals: dict) -> dict:
@@ -20,9 +20,21 @@ def _trim_signals(signals: dict) -> dict:
     if not hw_timestamps_names:
         return signals
 
-    # Computes the common time window across all hardware timestamps
-    starts = [float(signals[name]["data"][0, 0]) for name in hw_timestamps_names]
-    ends = [float(signals[name]["data"][-1, 0]) for name in hw_timestamps_names]
+    # Unwraps the hardware timestamps
+    unwrapped_timestamps = {}
+    for ts_name in hw_timestamps_names:
+        ts_raw = signals[ts_name]["data"].reshape(-1)
+        if ts_raw.size == 0:
+            continue
+        ts_modulus = compute_modulus(ts_raw, ts_raw.dtype)
+        unwrapped_timestamps[ts_name] = unwrap_signal(ts_raw, ts_modulus).astype(np.float64)
+
+    if not unwrapped_timestamps:
+        return signals
+
+    # Computes the common time window across unwrapped hardware timestamps
+    starts = [float(unwrapped_timestamps[t][0]) for t in unwrapped_timestamps]
+    ends = [float(unwrapped_timestamps[t][-1]) for t in unwrapped_timestamps]
     common_start = max(starts)
     common_end = min(ends)
 
@@ -32,7 +44,9 @@ def _trim_signals(signals: dict) -> dict:
     # Computes the trimming indices for hardware timestamps and their associated signals
     packet_windows = {}
     for ts_name in hw_timestamps_names:
-        ts_data = signals[ts_name]["data"].reshape(-1)
+        ts_data = unwrapped_timestamps.get(ts_name)
+        if ts_data is None or ts_data.size == 0:
+            continue
         start_packet = int(np.searchsorted(ts_data, common_start, side="left"))
         end_packet = int(np.searchsorted(ts_data, common_end, side="right"))
         packet_windows[ts_name] = (start_packet, end_packet)
@@ -86,10 +100,10 @@ def _repair_counter_losses(signals: dict) -> None:
         if counter_raw.size == 0:
             continue
 
-        original_dtype = counter_raw.dtype
+        counter_original_dtype = counter_raw.dtype
 
-        modulus = compute_counter_modulus(counter_raw, original_dtype)
-        unwrapped = unwrap_counter(counter_raw, modulus)
+        modulus = compute_modulus(counter_raw, counter_original_dtype)
+        unwrapped = unwrap_signal(counter_raw, modulus)
 
         relative_indices = (unwrapped - unwrapped[0]).astype(np.int64)
         total_expected_packets = int(relative_indices[-1]) + 1
@@ -104,15 +118,20 @@ def _repair_counter_losses(signals: dict) -> None:
         rebuilt_payload_packets = np.full((total_expected_packets, samples_per_packet, payload_channels), np.nan)
         rebuilt_payload_packets[relative_indices] = payload_packets
 
-        # Reconstruct the timestamps
-        timestamp_data = signals[timestamp_name]["data"].reshape(-1).astype(np.float64)
-        timestamp_step = 1_000_000.0 / float(signals[timestamp_name]["fs"])
-        rebuilt_timestamps = timestamp_data[0] + (np.arange(total_expected_packets, dtype=np.float64) * timestamp_step)
-        rebuilt_timestamps[relative_indices] = timestamp_data
+        # Reconstruct the hardware timestamps
+        timestamp_raw = signals[timestamp_name]["data"].reshape(-1)
+        timestamp_original_dtype = timestamp_raw.dtype
+        timestamp_modulus = compute_modulus(timestamp_raw, timestamp_original_dtype)
+        timestamp_unwrapped = unwrap_signal(timestamp_raw, timestamp_modulus).astype(np.float64)
 
-        signals[counter_name]["data"] = rebuilt_counter.astype(original_dtype).reshape(-1, 1)
+        timestamp_step = 1_000_000.0 / float(signals[timestamp_name]["fs"])
+        rebuilt_timestamps = timestamp_unwrapped[0] + (np.arange(total_expected_packets, dtype=np.float64) * timestamp_step)
+        rebuilt_timestamps[relative_indices] = timestamp_unwrapped
+        rebuilt_timestamps_wrapped = (rebuilt_timestamps % timestamp_modulus).astype(timestamp_original_dtype)
+
+        signals[counter_name]["data"] = rebuilt_counter.astype(counter_original_dtype).reshape(-1, 1)
         signals[signal_name]["data"] = rebuilt_payload_packets.reshape(-1, payload_channels)
-        signals[timestamp_name]["data"] = rebuilt_timestamps.reshape(-1, 1)
+        signals[timestamp_name]["data"] = rebuilt_timestamps_wrapped.reshape(-1, 1)
 
 
 def align_bio_signals(file_path: str) -> dict:
@@ -124,9 +143,7 @@ def align_bio_signals(file_path: str) -> dict:
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
-        raise SystemExit(
-            "Usage: python utils/align_bio_signals.py PATH_TO_INPUT_BIO PATH_TO_OUTPUT_DIR"
-        )
+        raise SystemExit("Usage: python utils/align_bio_signals.py PATH_TO_INPUT_BIO PATH_TO_OUTPUT_DIR")
 
     input_bio  = Path(sys.argv[1])
     output_dir = Path(sys.argv[2])
