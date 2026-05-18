@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import argparse
 import numpy as np
 from pathlib import Path
 from read_bio_file import read_bio_file
@@ -10,15 +11,128 @@ from write_bio_file import write_bio_file
 from check_packet_loss import compute_modulus, unwrap_signal
 
 
-def _trim_signals(signals: dict) -> dict:
-    """Trim all signals to the common time window defined by hardware timestamps."""
+def _us_to_ms(value_us: float) -> str:
+    return f"{value_us / 1_000.0:.3f} ms"
+
+
+def _print_timestamp_preview(signals: dict, title: str) -> None:
+    """Print the first/last sample and sampling info of the EMG and mic_EMG hardware timestamps."""
+    print(f"\n{title}")
+    first_values = {}
+    last_values = {}
+    for ts_name in ("timestamp_emg", "timestamp_mic_emg"):
+        data = np.asarray(signals[ts_name]["data"]).reshape(-1)
+        first_value = float(data[0])
+        last_value = float(data[-1])
+        first_values[ts_name] = first_value
+        last_values[ts_name] = last_value
+
+        fs_ts = signals[ts_name]["fs"]
+        step_ms = 1_000_000.0 / fs_ts / 1_000.0
+        signal_name = ts_name.replace("timestamp_", "", 1)
+        fs_signal = signals[signal_name]["fs"] if signal_name in signals else None
+        samples_per_packet = (
+            int(round(fs_signal / fs_ts)) if fs_signal is not None else None
+        )
+
+        print(
+            f"  {ts_name}: fs={fs_ts:.1f} Hz, "
+            f"nominal step={step_ms:.3f} ms, "
+            f"samples/packet={samples_per_packet}"
+        )
+        print(
+            f"    first value = {_us_to_ms(first_value)}, "
+            f"last value = {_us_to_ms(last_value)}"
+        )
+
+    if "timestamp_emg" in first_values and "timestamp_mic_emg" in first_values:
+        diff_first = first_values["timestamp_emg"] - first_values["timestamp_mic_emg"]
+        diff_last  = last_values["timestamp_emg"]  - last_values["timestamp_mic_emg"]
+        print(f"  difference first values (timestamp_emg - timestamp_mic_emg) = {_us_to_ms(diff_first)}")
+        print(f"  difference last values  (timestamp_emg - timestamp_mic_emg) = {_us_to_ms(diff_last)}")
+
+
+def _print_trigger_rising_edge_preview(
+    signals: dict,
+    title: str,
+    trim_offsets: dict[str, int] | None = None,
+) -> None:
+    """Print timestamp values around the first and last rising edge of the trigger signal."""
+    trigger = signals.get("trigger")
+    if trigger is None:
+        return
+
+    trigger_data = np.asarray(trigger["data"]).reshape(-1)
+    rising_edges = np.flatnonzero((trigger_data[:-1] <= 0) & (trigger_data[1:] > 0)) + 1
+
+    print(f"\n{title}")
+
+    if rising_edges.size == 0:
+        print("  no rising edges found in trigger signal")
+        return
+
+    edge_positions = [("first", int(rising_edges[0])), ("last", int(rising_edges[-1]))]
+    trigger_fs = signals["trigger"]["fs"]
+
+    for edge_label, edge_idx in edge_positions:
+        print(f"  trigger {edge_label} rising edge index = {edge_idx} (sample)")
+
+        emg_value = None
+        mic_value = None
+
+        for ts_name in ("timestamp_emg", "timestamp_mic_emg"):
+            ts_data = np.asarray(signals[ts_name]["data"]).reshape(-1)
+            if ts_data.size == 0:
+                print(f"  {ts_name}: empty")
+                continue
+
+            ts_idx_global = int(edge_idx * signals[ts_name]["fs"] / trigger_fs)
+            offset = (trim_offsets or {}).get(ts_name, 0)
+            ts_idx = ts_idx_global - offset
+
+            value, clamped = _value_at_edge(ts_data, ts_idx)
+            suffix = " (clamped to last sample)" if clamped else ""
+            print(f"  {ts_name}: value at trigger edge = {_us_to_ms(value)}{suffix}")
+
+            if ts_name == "timestamp_emg":
+                emg_value = value
+            elif ts_name == "timestamp_mic_emg":
+                mic_value = value
+
+        if emg_value is not None and mic_value is not None:
+            diff = emg_value - mic_value
+            print(
+                f"  difference at {edge_label} trigger edge "
+                f"(timestamp_emg - timestamp_mic_emg) = {_us_to_ms(diff)}"
+            )
+
+
+def _value_at_edge(ts_data: np.ndarray, ts_idx: int) -> tuple[float, bool]:
+    """Return the timestamp at ts_idx, clamping to the last sample if out of bounds."""
+    if ts_idx < ts_data.size:
+        return float(ts_data[ts_idx]), False
+    return float(ts_data[-1]), True
+
+
+def _trim_signals(signals: dict) -> tuple[dict, dict[str, int]]:
+    """Trim all signals to the common time window defined by hardware timestamps.
+
+    Returns
+    -------
+    trimmed :
+        Dictionary of trimmed signals.
+    trim_offsets :
+        ``{ts_name: start_packet}`` — how many packets were removed from the
+        beginning of each timestamp array.  Used by the preview functions to
+        keep trigger-edge index mapping correct after trimming.
+    """
     hw_timestamps_names = [
         name for name in signals
         if name.startswith("timestamp_") and signals[name]["data"].size > 0
     ]
 
     if not hw_timestamps_names:
-        return signals
+        return signals, {}
 
     # Unwraps the hardware timestamps
     unwrapped_timestamps = {}
@@ -30,7 +144,7 @@ def _trim_signals(signals: dict) -> dict:
         unwrapped_timestamps[ts_name] = unwrap_signal(ts_raw, ts_modulus).astype(np.float64)
 
     if not unwrapped_timestamps:
-        return signals
+        return signals, {}
 
     # Computes the common time window across unwrapped hardware timestamps
     starts = [float(unwrapped_timestamps[t][0]) for t in unwrapped_timestamps]
@@ -42,7 +156,7 @@ def _trim_signals(signals: dict) -> dict:
         raise ValueError("Signals have no overlapping time window.")
 
     # Computes the trimming indices for hardware timestamps and their associated signals
-    packet_windows = {}
+    packet_windows: dict[str, tuple[int, int]] = {}
     for ts_name in hw_timestamps_names:
         ts_data = unwrapped_timestamps.get(ts_name)
         if ts_data is None or ts_data.size == 0:
@@ -77,11 +191,12 @@ def _trim_signals(signals: dict) -> dict:
 
         sample_start = start_packet * samples_per_packet
         sample_end = end_packet * samples_per_packet
-        trimmed_data = signal["data"][sample_start:sample_end].copy()
 
-        trimmed[signal_name] = {"fs": signal["fs"], "data": trimmed_data}
+        trimmed[signal_name] = {"fs": signal["fs"], "data": signal["data"][sample_start:sample_end].copy()}
 
-    return trimmed
+    trim_offsets = {ts_name: packet_windows[ts_name][0] for ts_name in packet_windows}
+    return trimmed, trim_offsets
+
 
 
 def _repair_counter_losses(signals: dict) -> None:
@@ -134,23 +249,50 @@ def _repair_counter_losses(signals: dict) -> None:
         signals[timestamp_name]["data"] = rebuilt_timestamps_wrapped.reshape(-1, 1)
 
 
-def align_bio_signals(file_path: str) -> dict:
+
+def align_bio_signals(file_path: str, debug: bool = False) -> dict:
     signals = read_bio_file(file_path)
-    aligned_signals = _trim_signals(signals)
+
+    if debug:
+        _print_timestamp_preview(signals, "[BEFORE ALIGNMENT] timestamp")
+        _print_trigger_rising_edge_preview(signals, "[BEFORE ALIGNMENT] trigger edge timestamp")
+
+    aligned_signals, trim_offsets = _trim_signals(signals)
     _repair_counter_losses(aligned_signals)
+
+    if debug:
+        _print_timestamp_preview(aligned_signals, "[AFTER ALIGNMENT] timestamp")
+        _print_trigger_rising_edge_preview(
+            aligned_signals,
+            "[AFTER ALIGNMENT] trigger edge timestamp",
+            trim_offsets=trim_offsets,
+        )
+
     return aligned_signals
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: python utils/align_bio_signals.py PATH_TO_INPUT_BIO PATH_TO_OUTPUT_DIR")
+    parser = argparse.ArgumentParser(
+        description="Align and repair signals stored in a .bio file.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("input_bio", type=Path, help="Path to the input .bio file.")
+    parser.add_argument("output_dir", type=Path, help="Directory where the aligned file will be saved.")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help=(
+            "Print diagnostic information: first/last timestamp values, "
+            "sampling frequencies, nominal packet step, samples-per-packet, "
+            "and trigger edge mapping."
+        ),
+    )
+    args = parser.parse_args()
 
-    input_bio  = Path(sys.argv[1])
-    output_dir = Path(sys.argv[2])
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    output_bio = args.output_dir / f"{args.input_bio.stem}_aligned{args.input_bio.suffix}"
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_bio = output_dir / f"{input_bio.stem}_aligned{input_bio.suffix}"
-
-    aligned = align_bio_signals(str(input_bio))
+    aligned = align_bio_signals(str(args.input_bio), debug=args.debug)
     write_bio_file(str(output_bio), aligned)
-    print(f"[SAVED]: {output_bio}")
+    print(f"\n[SAVED]: {output_bio}")
