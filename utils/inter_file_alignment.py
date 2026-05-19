@@ -1,6 +1,9 @@
 """
 Synchronize signals from two independent .bio files without altering raw data.
 Assumes both files contain the same trigger sequence (same codes, same order).
+
+Usage:
+    python inter_file_alignment.py file_a.bio file_b.bio output_dir [--debug]
 """
 
 from __future__ import annotations

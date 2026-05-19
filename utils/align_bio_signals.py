@@ -1,14 +1,27 @@
-"""Align and repair signals stored in a .bio file."""
+"""
+Align and repair signals stored in a .bio file.
+
+Usage:
+-----
+    python align_bio_signals.py <input_file.bio> <output_directory> [--debug]
+
+The script reads signals from the specified input .bio file, aligns them based on their hardware timestamps, 
+repairs any missing packets by filling them with NaNs, and saves the aligned signals to a new .bio file in the 
+specified output directory.
+"""
 
 from __future__ import annotations
 
-import sys
 import argparse
 import numpy as np
 from pathlib import Path
 from read_bio_file import read_bio_file
 from write_bio_file import write_bio_file
 from check_packet_loss import compute_modulus, unwrap_signal
+
+# ----------------------------
+# Debugging utilities
+# ----------------------------
 
 
 def _us_to_ms(value_us: float) -> str:
@@ -114,17 +127,13 @@ def _value_at_edge(ts_data: np.ndarray, ts_idx: int) -> tuple[float, bool]:
     return float(ts_data[-1]), True
 
 
-def _trim_signals(signals: dict) -> tuple[dict, dict[str, int]]:
-    """Trim all signals to the common time window defined by hardware timestamps.
+# --------------------------------------------
+# Main alignment utilities
+# --------------------------------------------
 
-    Returns
-    -------
-    trimmed :
-        Dictionary of trimmed signals.
-    trim_offsets :
-        ``{ts_name: start_packet}`` — how many packets were removed from the
-        beginning of each timestamp array.
-    """
+
+def _trim_signals(signals: dict) -> tuple[dict, dict[str, int]]:
+    """Trim all signals to the common time window defined by hardware timestamps."""
     hw_timestamps_names = [
         name for name in signals
         if name.startswith("timestamp_") and signals[name]["data"].size > 0
@@ -197,9 +206,8 @@ def _trim_signals(signals: dict) -> tuple[dict, dict[str, int]]:
     return trimmed, trim_offsets
 
 
-
-def _repair_counter_losses(signals: dict) -> None:
-    """Repair counter signals by filling in missing packets with NaNs, reconstructs the correct counter values and timestamps."""
+def _repair_signals(signals: dict) -> None:
+    """Repair signals by filling in missing packets with NaNs, reconstructs the correct counter values and timestamps."""
     counter_names = [name for name in signals if name.startswith("counter_")]
 
     for counter_name in counter_names:
@@ -248,8 +256,8 @@ def _repair_counter_losses(signals: dict) -> None:
         signals[timestamp_name]["data"] = rebuilt_timestamps_wrapped.reshape(-1, 1)
 
 
-
 def align_bio_signals(file_path: str, debug: bool = False) -> dict:
+    """Align and repair signals stored in a .bio file."""
     signals = read_bio_file(file_path)
 
     if debug:
@@ -257,7 +265,7 @@ def align_bio_signals(file_path: str, debug: bool = False) -> dict:
         _print_trigger_rising_edge_debug_info(signals, "[BEFORE ALIGNMENT] trigger edge timestamp")
 
     aligned_signals, trim_offsets = _trim_signals(signals)
-    _repair_counter_losses(aligned_signals)
+    _repair_signals(aligned_signals)
 
     if debug:
         _print_timestamp_debug_info(aligned_signals, "[AFTER ALIGNMENT] timestamp")
@@ -268,6 +276,11 @@ def align_bio_signals(file_path: str, debug: bool = False) -> dict:
         )
 
     return aligned_signals
+
+
+# --------------------------------------------
+# Main
+# --------------------------------------------
 
 
 if __name__ == "__main__":

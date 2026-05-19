@@ -1,6 +1,4 @@
-"""
-Script for plotting signals from .bio files with optional filtering based on a JSON config.
-"""
+"""Script for plotting signals from .bio files with optional filtering based on a JSON config."""
 
 import sys
 import os
@@ -24,6 +22,52 @@ from utils.filter import apply_filters_nan, load_signal_filters, iter_true_runs
 CONFIG_PATH = Path(__file__).parent/"config"/"plot_config.json"
 
 LINE_WIDTH = 0.8
+
+
+# --------------------------------------------
+# Timestamp utilities
+# --------------------------------------------
+
+
+def expand_timestamps_to_samples(
+    timestamp_data: np.ndarray,
+    fs_signal: float,
+    fs_timestamp: float,
+) -> np.ndarray:
+    """Expand packet-level hardware timestamps (µs) to per-sample timestamps (µs), rescaled to t=0.
+
+    Each hardware timestamp marks the last sample of its packet.
+    The inter-sample step is ``1_000_000 / fs_signal`` µs.
+    """
+    ts = np.asarray(timestamp_data, dtype=np.float64).reshape(-1)
+    samples_per_packet = int(round(fs_signal / fs_timestamp))
+    sample_step_us = 1_000_000.0 / fs_signal
+    offsets = (np.arange(samples_per_packet, dtype=np.float64) - (samples_per_packet - 1)) * sample_step_us
+    expanded = (ts[:, np.newaxis] + offsets[np.newaxis, :]).reshape(-1)
+    expanded -= expanded[0]
+    return expanded
+
+
+def extract_time_axis(
+    sig_data: dict,
+    ts_entry: dict | None,
+) -> tuple[np.ndarray, int]:
+    """Build the time axis in seconds for a signal.
+
+    If a hardware timestamp entry is present, expands it to per-sample
+    resolution via expand_timestamps_to_samples (rescaled to t=0).
+    Otherwise builds a synthetic axis from sample index and fs.
+    """
+    n_samp = sig_data["data"].shape[0]
+
+    if ts_entry is not None:
+        ts_arr = np.asarray(ts_entry["data"]).ravel()
+        t = expand_timestamps_to_samples(ts_arr, sig_data["fs"], ts_entry["fs"]) / 1_000_000.0
+    else:
+        t = np.arange(n_samp, dtype=np.float64) / sig_data["fs"]
+
+    min_len = min(n_samp, len(t))
+    return t[:min_len], min_len
 
 
 # --------------------------------------------
@@ -101,7 +145,7 @@ def color_nan_regions(ax, t: np.ndarray, data: np.ndarray) -> None:
         ax.axvspan(x0, x1, color="red", alpha=0.18, zorder=0)
 
 
-def _update_x_ticks(ax) -> None:
+def update_x_ticks(ax) -> None:
     """Set adaptive x ticks"""
     xmin, xmax = ax.get_xlim()
     span = max(float(xmax - xmin), 1e-12)
@@ -115,30 +159,6 @@ def _update_x_ticks(ax) -> None:
 
     ax.xaxis.set_major_locator(MultipleLocator(spacing))
     ax.grid(axis="x", which="major", linestyle="-", color="#e0e0e0", linewidth=0.5, alpha=0.7)
-
-
-def extract_time_axis(
-    sig_data: dict,
-    ts_entry: dict | None,
-    use_hw_ts: bool = False,
-) -> tuple[np.ndarray, int]:
-    """Build the time axis in seconds for a signal.
-
-    If *use_hw_ts* is True and a valid ts_entry is present, the hardware
-    timestamps (in µs) are repeated to match the signal sample rate.
-    Otherwise a synthetic axis is built from the sample index and fs.
-    """
-    n_samp = sig_data["data"].shape[0]
-
-    if use_hw_ts and ts_entry and ts_entry.get("data") is not None and ts_entry.get("fs"):
-        ts_arr = np.asarray(ts_entry["data"]).ravel()
-        spp = max(1, round(sig_data["fs"] / ts_entry["fs"]))
-        t = np.repeat(ts_arr, spp) / 1_000_000.0  # µs → s
-    else:
-        t = np.arange(n_samp) / sig_data["fs"]
-
-    min_len = min(n_samp, len(t))
-    return t[:min_len], min_len
 
 
 def plot_signal_on_axis(
@@ -186,11 +206,6 @@ def main():
     parser = argparse.ArgumentParser(description="Plot signal from a .bio file.")
     parser.add_argument("file_path", help="Path to the .bio file")
     parser.add_argument("--filter", action="store_true", help="Apply filtering to the signals")
-    parser.add_argument(
-        "--x_axis_hw_ts",
-        action="store_true",
-        help="Use hardware timestamps for the x-axis when available (applies to all signals)",
-    )
     args = parser.parse_args()
 
     file_path = args.file_path
@@ -210,18 +225,16 @@ def main():
 
     apply_channel_exclusions(signals, signal_filters)
 
-    use_hw_ts = args.x_axis_hw_ts
-
     # Plot each signal individually
     for sig_name, sig_data in signals.items():
         fig, ax = plt.subplots(figsize=(16, 6), layout="constrained")
         fig.suptitle(filename, fontsize=12)
         ts_entry = signals.get(f"timestamp_{sig_name}")
-        t, min_len = extract_time_axis(sig_data, ts_entry, use_hw_ts)
+        t, min_len = extract_time_axis(sig_data, ts_entry)
         plot_signal_on_axis(ax, sig_name, sig_data, t, min_len)
-        if not use_hw_ts:
-            ax.callbacks.connect("xlim_changed", _update_x_ticks)
-            _update_x_ticks(ax)
+        if ts_entry is None:
+            ax.callbacks.connect("xlim_changed", update_x_ticks)
+            update_x_ticks(ax)
         ax.set_xlabel("Time [s]")
 
     # Additional plot: top = base signal, bottom = matching mic_<base> signal
@@ -240,18 +253,19 @@ def main():
         fig.suptitle(filename, fontsize=12)
 
         ts_base = signals.get(f"timestamp_{base_name}")
-        t_base, len_base = extract_time_axis(base_data, ts_base, use_hw_ts)
+        t_base, len_base = extract_time_axis(base_data, ts_base)
         plot_signal_on_axis(ax_top, base_name, base_data, t_base, len_base)
 
         ts_mic = signals.get(f"timestamp_{mic_name}")
-        t_mic, len_mic = extract_time_axis(mic_data, ts_mic, use_hw_ts)
+        t_mic, len_mic = extract_time_axis(mic_data, ts_mic)
         plot_signal_on_axis(ax_bottom, mic_name, mic_data, t_mic, len_mic)
 
-        if not use_hw_ts:
-            ax_top.callbacks.connect("xlim_changed", _update_x_ticks)
-            ax_bottom.callbacks.connect("xlim_changed", _update_x_ticks)
-            _update_x_ticks(ax_top)
-            _update_x_ticks(ax_bottom)
+        if ts_base is None:
+            ax_top.callbacks.connect("xlim_changed", update_x_ticks)
+            update_x_ticks(ax_top)
+        if ts_mic is None:
+            ax_bottom.callbacks.connect("xlim_changed", update_x_ticks)
+            update_x_ticks(ax_bottom)
 
         ax_bottom.set_xlabel("Time [s]")
 

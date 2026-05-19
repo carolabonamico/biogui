@@ -5,7 +5,6 @@ Usage
 -----
     python plot_signal_and_trigger.py <file.bio>
     python plot_signal_and_trigger.py <file.bio> --filter
-    python plot_signal_and_trigger.py <file.bio> --x_axis_hw_ts
 
 The script looks for a base signal (defined by BASE_SIGNAL_NAME) and a trigger 
 signal (defined by TRIGGER_SIGNAL_NAME) in the .bio file.
@@ -37,29 +36,28 @@ if str(ROOT_DIR) not in sys.path:
 
 from utils.read_bio_file import read_bio_file
 from utils.filter import apply_filters_nan, load_signal_filters
-from plot_filtered_signal import apply_channel_exclusions, plot_signal_on_axis, extract_time_axis, _update_x_ticks
-
+from plot_filtered_signal import (
+    apply_channel_exclusions,
+    plot_signal_on_axis,
+    extract_time_axis, 
+    update_x_ticks
+)
 
 CONFIG_PATH = Path(__file__).parent / "config" / "plot_config.json"
 
-BASE_SIGNAL_NAME = "emg"
+BASE_SIGNAL_NAME = "eeg"
 TRIGGER_SIGNAL_NAME = "trigger"
+
+
+# --------------------------------------------
+# Signal and trigger processing utilities
+# --------------------------------------------
 
 
 def _detect_trigger_edges(
     trigger: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Detect rising and falling edges in a 1-D trigger signal.
-
-    The trigger value encodes the word label (non-zero = active window, 0 = idle).
-
-    Returns
-    -------
-    rising_idx    : sample indices of rising edges
-    rising_words  : word label at each rising edge
-    falling_idx   : sample indices of falling edges
-    falling_words : word label immediately before each falling edge
-    """
+    """Detect rising and falling edges in a 1-D trigger signal."""
     trig = np.asarray(trigger, dtype=np.float64).ravel()
     active = (trig != 0).astype(np.int8)
     diff = np.diff(active, prepend=active[0])
@@ -83,14 +81,13 @@ def plot_base_signal_and_trigger_overview(
     use_hw_ts: bool = False,
 ) -> Figure:
     """Build and return the base signal and trigger figure."""
-
     trig_raw = np.asarray(trigger_sig["data"], dtype=np.float64)
     if trig_raw.ndim == 2:
         trig_raw = trig_raw[:, 0]
     trig_fs = float(trigger_sig["fs"])
 
     # Build time axes
-    t_base, len_base = extract_time_axis(base_sig, ts_base, use_hw_ts)
+    t_base, len_base = extract_time_axis(base_sig, ts_base)
     t_trig = np.arange(trig_raw.shape[0]) / trig_fs  # trigger has no hw timestamp
 
     # When using hw timestamps, shift all axes so they start from 0
@@ -101,7 +98,7 @@ def plot_base_signal_and_trigger_overview(
     t_mic: np.ndarray = np.empty(0)
     len_mic = 0
     if mic_sig is not None:
-        t_mic, len_mic = extract_time_axis(mic_sig, ts_mic, use_hw_ts)
+        t_mic, len_mic = extract_time_axis(mic_sig, ts_mic)
         t_mic = t_mic - t_offset
 
     # Detect edges on trigger signal
@@ -173,17 +170,12 @@ def plot_base_signal_and_trigger_overview(
     for ft in falling_t:
         ax_trig.axvline(ft, color="red", lw=0.9, ls="--", alpha=0.8, zorder=3)
 
-    # If not using hardware timestamps, prefer 100 ms x-ticks (adaptive to span)
-    if not use_hw_ts:
-        axes_to_update = [ax_base, ax_trig]
-        if ax_mic is not None:
-            axes_to_update.insert(1, ax_mic)
-        for a in axes_to_update:
-            _update_x_ticks(a)
-            try:
-                a.callbacks.connect("xlim_changed", _update_x_ticks)
-            except Exception:
-                pass
+    axes_to_update = [ax_base, ax_trig]
+    if ax_mic is not None:
+        axes_to_update.insert(1, ax_mic)
+    for a in axes_to_update:
+        update_x_ticks(a)
+        a.callbacks.connect("xlim_changed", update_x_ticks)
 
     fig.legend(
         handles=[
@@ -209,7 +201,7 @@ def main():
     )
     parser.add_argument("file_path", help="Path to the .bio file")
     parser.add_argument("--filter", action="store_true", help=f"Apply filtering to the {BASE_SIGNAL_NAME.upper()} signal")
-    parser.add_argument("--x_axis_hw_ts", action="store_true", help="Use hardware timestamps for the x-axis when available")
+    
     args = parser.parse_args()
 
     signal_filters = load_signal_filters(CONFIG_PATH)
@@ -252,7 +244,6 @@ def main():
         mic_sig=mic_sig,
         ts_base=signals.get(f"timestamp_{base_key}"),
         ts_mic=signals.get(f"timestamp_{mic_key}") if mic_key else None,
-        use_hw_ts=args.x_axis_hw_ts,
     )
     plt.show()
 
