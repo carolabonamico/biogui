@@ -31,7 +31,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from utils.read_bio_file import read_bio_file
 from utils.filter import apply_filters_nan, load_signal_filters
-from plot_filtered_signal import apply_channel_exclusions, plot_signal_on_axis, extract_time_axis
+from plot_filtered_signal import apply_channel_exclusions, plot_signal_on_axis, extract_time_axis, _update_x_ticks
 
 
 CONFIG_PATH = Path(__file__).parent / "config" / "plot_config.json"
@@ -166,6 +166,18 @@ def plot_base_signal_and_trigger_overview(
         ax_trig.axvline(rt, color="green", lw=0.9, ls="--", alpha=0.8, zorder=3)
     for ft in falling_t:
         ax_trig.axvline(ft, color="red", lw=0.9, ls="--", alpha=0.8, zorder=3)
+
+    # If not using hardware timestamps, prefer 100 ms x-ticks (adaptive to span)
+    if not use_hw_ts:
+        axes_to_update = [ax_base, ax_trig]
+        if ax_mic is not None:
+            axes_to_update.insert(1, ax_mic)
+        for a in axes_to_update:
+            _update_x_ticks(a)
+            try:
+                a.callbacks.connect("xlim_changed", _update_x_ticks)
+            except Exception:
+                pass
 
     fig.legend(
         handles=[
