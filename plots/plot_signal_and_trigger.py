@@ -125,12 +125,12 @@ def plot_base_signal_and_trigger_overview(
             figsize=(18, 8),
             layout="constrained",
             sharex=True,
-            gridspec_kw={"height_ratios": [2, 2]},
+            gridspec_kw={"height_ratios": [3, 1]},
         )
     else:
         fig, (ax_base, ax_mic, ax_trig) = plt.subplots(
-            3, 1, figsize=(18, 10), layout="constrained", sharex=True,
-            gridspec_kw={"height_ratios": [2, 2, 2]},
+            3, 1, figsize=(18, 12), layout="constrained", sharex=True,
+            gridspec_kw={"height_ratios": [3, 3, 1]},
         )
 
     fig.suptitle(filename, fontsize=14)
@@ -191,7 +191,7 @@ def main():
     )
     parser.add_argument("file_path", help="Path to the .bio file")
     parser.add_argument("--filter", action="store_true", help=f"Apply filtering to the {BASE_SIGNAL_NAME.upper()} signal")
-    parser.add_argument("x_axis_hw_ts", action="store_true", help="Use hardware timestamps for the x-axis when available")
+    parser.add_argument("--x_axis_hw_ts", action="store_true", help="Use hardware timestamps for the x-axis when available")
     args = parser.parse_args()
 
     signal_filters = load_signal_filters(CONFIG_PATH)
