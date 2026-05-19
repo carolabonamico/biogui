@@ -24,6 +24,12 @@ from matplotlib import pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from pathlib import Path
+import warnings
+
+warnings.filterwarnings(
+    "ignore", 
+    message="constrained_layout not applied.*"
+)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:

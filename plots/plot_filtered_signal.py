@@ -214,8 +214,6 @@ def main():
 
     # Plot each signal individually
     for sig_name, sig_data in signals.items():
-        if sig_name.startswith("timestamp_"):
-            continue
         fig, ax = plt.subplots(figsize=(16, 6), layout="constrained")
         fig.suptitle(filename, fontsize=12)
         ts_entry = signals.get(f"timestamp_{sig_name}")
