@@ -15,7 +15,7 @@ def _us_to_ms(value_us: float) -> str:
     return f"{value_us / 1_000.0:.3f} ms"
 
 
-def _print_timestamp_preview(signals: dict, title: str) -> None:
+def _print_timestamp_debug_info(signals: dict, title: str) -> None:
     """Print the first/last sample and sampling info of the EMG and mic_EMG hardware timestamps."""
     print(f"\n{title}")
     first_values = {}
@@ -52,7 +52,7 @@ def _print_timestamp_preview(signals: dict, title: str) -> None:
         print(f"  difference last values  (timestamp_emg - timestamp_mic_emg) = {_us_to_ms(diff_last)}")
 
 
-def _print_trigger_rising_edge_preview(
+def _print_trigger_rising_edge_debug_info(
     signals: dict,
     title: str,
     trim_offsets: dict[str, int] | None = None,
@@ -123,8 +123,7 @@ def _trim_signals(signals: dict) -> tuple[dict, dict[str, int]]:
         Dictionary of trimmed signals.
     trim_offsets :
         ``{ts_name: start_packet}`` — how many packets were removed from the
-        beginning of each timestamp array.  Used by the preview functions to
-        keep trigger-edge index mapping correct after trimming.
+        beginning of each timestamp array.
     """
     hw_timestamps_names = [
         name for name in signals
@@ -254,15 +253,15 @@ def align_bio_signals(file_path: str, debug: bool = False) -> dict:
     signals = read_bio_file(file_path)
 
     if debug:
-        _print_timestamp_preview(signals, "[BEFORE ALIGNMENT] timestamp")
-        _print_trigger_rising_edge_preview(signals, "[BEFORE ALIGNMENT] trigger edge timestamp")
+        _print_timestamp_debug_info(signals, "[BEFORE ALIGNMENT] timestamp")
+        _print_trigger_rising_edge_debug_info(signals, "[BEFORE ALIGNMENT] trigger edge timestamp")
 
     aligned_signals, trim_offsets = _trim_signals(signals)
     _repair_counter_losses(aligned_signals)
 
     if debug:
-        _print_timestamp_preview(aligned_signals, "[AFTER ALIGNMENT] timestamp")
-        _print_trigger_rising_edge_preview(
+        _print_timestamp_debug_info(aligned_signals, "[AFTER ALIGNMENT] timestamp")
+        _print_trigger_rising_edge_debug_info(
             aligned_signals,
             "[AFTER ALIGNMENT] trigger edge timestamp",
             trim_offsets=trim_offsets,
