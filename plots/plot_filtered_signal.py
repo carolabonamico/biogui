@@ -107,13 +107,11 @@ def _update_x_ticks(ax) -> None:
     span = max(float(xmax - xmin), 1e-12)
     base = 0.10  # 100 ms
 
-    desired_ticks = 10
-    spacing = max(base, np.ceil((span / desired_ticks) / base) * base)
-
-    # Prevent locator overflow warnings.
-    max_ticks = 900
-    if span / spacing > max_ticks:
-        spacing = max(base, np.ceil((span / max_ticks) / base) * base)
+    if span <= 5.0:
+        spacing = base
+    else:
+        desired_ticks = 10
+        spacing = max(base, np.ceil((span / desired_ticks) / base) * base)
 
     ax.xaxis.set_major_locator(MultipleLocator(spacing))
     ax.grid(axis="x", which="major", linestyle="-", color="#e0e0e0", linewidth=0.5, alpha=0.7)
