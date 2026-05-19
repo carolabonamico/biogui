@@ -6,6 +6,7 @@ import sys
 import argparse
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.ticker import MultipleLocator
 from pathlib import Path
 
 
@@ -94,6 +95,22 @@ def color_nan_regions(ax, t: np.ndarray, data: np.ndarray) -> None:
         x0 = float(t[start - 1]) if start > 0 else float(t[start])
         x1 = float(t[end - 1] + dt)
         ax.axvspan(x0, x1, color="red", alpha=0.18, zorder=0)
+
+
+def _update_x_ticks_50ms(ax) -> None:
+    """Set an adaptive x-axis tick spacing with 50 ms as the finest step."""
+    xmin, xmax = ax.get_xlim()
+    span = max(float(xmax - xmin), 1e-12)
+    base = 0.05  # 50 ms
+
+    if span <= 5.0:
+        spacing = base
+    else:
+        desired_ticks = 10
+        spacing = max(base, np.ceil((span / desired_ticks) / base) * base)
+
+    ax.xaxis.set_major_locator(MultipleLocator(spacing))
+    ax.grid(axis="x", which="major", linestyle="-", color="#e0e0e0", linewidth=0.5, alpha=0.7)
 
 
 def extract_time_axis(
@@ -200,6 +217,9 @@ def main():
         ts_entry = signals.get(f"timestamp_{sig_name}")
         t, min_len = extract_time_axis(sig_data, ts_entry, use_hw_ts)
         plot_signal_on_axis(ax, sig_name, sig_data, t, min_len)
+        if not use_hw_ts:
+            ax.callbacks.connect("xlim_changed", _update_x_ticks_50ms)
+            _update_x_ticks_50ms(ax)
         ax.set_xlabel("Time [s]")
 
     # Additional plot: top = base signal, bottom = matching mic_<base> signal
@@ -224,6 +244,12 @@ def main():
         ts_mic = signals.get(f"timestamp_{mic_name}")
         t_mic, len_mic = extract_time_axis(mic_data, ts_mic, use_hw_ts)
         plot_signal_on_axis(ax_bottom, mic_name, mic_data, t_mic, len_mic)
+
+        if not use_hw_ts:
+            ax_top.callbacks.connect("xlim_changed", _update_x_ticks_50ms)
+            ax_bottom.callbacks.connect("xlim_changed", _update_x_ticks_50ms)
+            _update_x_ticks_50ms(ax_top)
+            _update_x_ticks_50ms(ax_bottom)
 
         ax_bottom.set_xlabel("Time [s]")
 
