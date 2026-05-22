@@ -11,9 +11,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import numpy as np
+import sys
 
-from align_bio_signals import align_bio_signals
-from write_bio_file import write_bio_file
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+    
+from utils.align_bio_signals import align_bio_signals
+from utils.write_bio_file import write_bio_file
 
 
 def extract_trigger_times(signals: dict) -> np.ndarray:
@@ -113,18 +118,18 @@ def main() -> None:
     signals_a = align_bio_signals(str(file_a))
     signals_b = align_bio_signals(str(file_b))
 
-    print("\nStep 2: inter-file synchronization (mapping clocks)\n")
+    print("Step 2: inter-file synchronization (mapping clocks)")
     signals_b_aligned = synchronize_bio_files(signals_a, signals_b, debug=args.debug)
 
-    print("\nStep 3: saving files")
+    print("Step 3: saving files")
     out_a = output_dir / f"{file_a.stem}_inter_aligned{file_a.suffix}"
     out_b = output_dir / f"{file_b.stem}_inter_aligned{file_b.suffix}"
 
     write_bio_file(str(out_a), signals_a)
-    print(f"[SAVED]: {out_a}")
+    print(f"\n[SAVED]: {out_a}")
 
     write_bio_file(str(out_b), signals_b_aligned)
-    print(f"[SAVED]: {out_b}")
+    print(f"[SAVED]: {out_b}\n")
 
 
 if __name__ == "__main__":
