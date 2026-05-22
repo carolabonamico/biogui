@@ -35,8 +35,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from utils.read_bio_file import read_bio_file
-from utils.filter import apply_filters_nan, load_signal_filters
-from plot_filtered_signal import (
+from utils.filter import apply_filters, load_signal_filters
+from plots.plot_filtered_signal import (
     apply_channel_exclusions,
     plot_signal_on_axis,
     extract_time_axis, 
@@ -225,7 +225,7 @@ def main():
         base_cfg = signal_filters.get(base_key, {})
         filter_list = base_cfg.get("filters")
         if filter_list:
-            signals[base_key]["data"] = apply_filters_nan(
+            signals[base_key]["data"] = apply_filters(
                 data=signals[base_key]["data"],
                 fs=signals[base_key]["fs"],
                 filter_list=filter_list,

@@ -17,8 +17,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
     
 from utils.read_bio_file import read_bio_file
-from utils.filter import apply_filters_nan, interpolate_nans_1d, load_signal_filters, iter_true_runs
-from utils.compute_peak_delay import (highpass_filter, TRIM_SECONDS, CUTOFF_HZ, SIGNAL_CONFIG)
+from utils.filter import apply_filters, apply_single_filter, load_signal_filters
+from utils.compute_peak_delay import TRIM_SECONDS, CUTOFF_HZ, SIGNAL_CONFIG
 
 CONFIG_PATH = Path(__file__).parent/"config"/"plot_config.json"
 
@@ -117,35 +117,19 @@ def apply_channel_exclusions(signals: dict[str, dict], signal_cfg: dict[str, dic
 
 def compute_channel_spacing(data: np.ndarray) -> float:
     """Compute vertical spacing for plotting multiple channels."""
-    q95 = np.nanpercentile(data, 95, axis=0)
-    q05 = np.nanpercentile(data, 5, axis=0)
-    spread = np.nanmedian(q95 - q05)
-    if not np.isfinite(spread) or spread <= 0:
+    q95 = np.percentile(data, 95, axis=0)
+    q05 = np.percentile(data, 5, axis=0)
+    spread = np.median(q95 - q05)
+    if spread <= 0:
         return 1.0
     return float(spread * 1.5)
 
 
-def center_finite_runs(channel: np.ndarray) -> np.ndarray:
-    """Center the finite values of a channel by subtracting the global mean of finite values."""
+def center_channel(channel: np.ndarray) -> np.ndarray:
+    """Center a channel by subtracting its mean."""
     centered = np.asarray(channel, dtype=np.float64).copy()
-    finite_mask = np.isfinite(centered)
-    if np.any(finite_mask):
-        global_mean = np.mean(centered[finite_mask])
-        centered[finite_mask] -= global_mean
+    centered -= np.mean(centered)
     return centered
-
-
-def color_nan_regions(ax, t: np.ndarray, data: np.ndarray) -> None:
-    """Highlight regions in the plot where data contains NaNs."""
-    nan_mask = np.any(~np.isfinite(data), axis=1)
-    if not np.any(nan_mask):
-        return
-
-    dt = float(t[1] - t[0]) if t.size > 1 else 0.0
-    for start, end in iter_true_runs(nan_mask):
-        x0 = float(t[start - 1]) if start > 0 else float(t[start])
-        x1 = float(t[end - 1] + dt)
-        ax.axvspan(x0, x1, color="red", alpha=0.18, zorder=0)
 
 
 def update_x_ticks(ax) -> None:
@@ -180,13 +164,12 @@ def plot_signal_on_axis(
         channel_ids = list(range(n_ch))
 
     ax.set_title(sig_name)
-    color_nan_regions(ax, t, data)
 
     if n_ch > 1:
         spacing = compute_channel_spacing(data)
         offsets = np.arange(n_ch) * spacing
         for i in range(n_ch):
-            channel = center_finite_runs(data[:, i])
+            channel = center_channel(data[:, i])
             ax.plot(t, channel + offsets[i], lw=line_width)
         ax.set_yticks(offsets)
         ax.set_yticklabels([f"Ch {channel_ids[i]}" for i in range(n_ch)])
@@ -228,8 +211,15 @@ def load_and_prepare(file_path: str, signal_filters: dict, apply_filter: bool, p
                 
                 processed_channels = []
                 for ch in range(data.shape[1]):
-                    ch_data = interpolate_nans_1d(data[:, ch])
-                    ch_filtered = highpass_filter(ch_data, cutoff=CUTOFF_HZ, fs=fs)
+                    ch_filtered = apply_single_filter(
+                        data[:, ch].reshape(-1, 1),
+                        fs,
+                        {
+                            "type": "highpass",
+                            "order": 4,
+                            "cutoff": CUTOFF_HZ,
+                        },
+                    ).reshape(-1)
                     ch_rectified = np.abs(ch_filtered)
                     processed_channels.append(ch_rectified)
                 
@@ -239,7 +229,7 @@ def load_and_prepare(file_path: str, signal_filters: dict, apply_filter: bool, p
         for sig_name, sig_cfg in signal_filters.items():
             filter_list = sig_cfg.get("filters")
             if sig_name in signals and filter_list:
-                signals[sig_name]["data"] = apply_filters_nan(
+                signals[sig_name]["data"] = apply_filters(
                     data=signals[sig_name]["data"],
                     fs=signals[sig_name]["fs"],
                     filter_list=filter_list,

@@ -54,61 +54,10 @@ def apply_single_filter(data: np.ndarray, fs: float, filter_def: dict) -> np.nda
     raise ValueError(f"Unsupported filter type in config: {filter_type}")
 
 
-def _apply_filters_no_nan(data: np.ndarray, fs: float, filter_list: list[dict]) -> np.ndarray:
+def apply_filters(data: np.ndarray, fs: float, filter_list: list[dict]) -> np.ndarray:
     out = np.asarray(data, dtype=np.float64)
     for filter_def in filter_list:
         out = apply_single_filter(out, fs, filter_def)
-    return out
-
-
-def interpolate_nans_1d(channel: np.ndarray) -> np.ndarray:
-    """Fill NaN gaps in a 1D channel by linear interpolation over finite samples."""
-    interpolated = np.asarray(channel, dtype=np.float64).copy()
-    finite_mask = np.isfinite(interpolated)
-
-    if not np.any(finite_mask) or np.all(finite_mask):
-        return interpolated
-
-    sample_idx = np.arange(interpolated.size, dtype=np.float64)
-    interpolated[~finite_mask] = np.interp(
-        sample_idx[~finite_mask],
-        sample_idx[finite_mask],
-        interpolated[finite_mask],
-    )
-    return interpolated
-
-
-def iter_true_runs(mask: np.ndarray):
-    """Yield start and end indices of consecutive True runs in a boolean mask."""
-    start = None
-    for idx, is_true in enumerate(mask):
-        if is_true and start is None:
-            start = idx
-        elif not is_true and start is not None:
-            yield start, idx
-            start = None
-    if start is not None:
-        yield start, mask.size
-
-
-def apply_filters_nan(data: np.ndarray, fs: float, filter_list: list[dict]) -> np.ndarray:
-    """Apply filters to data that may contain NaNs, processing only finite segments."""
-    arr = np.asarray(data, dtype=np.float64)
-    
-    # If the array has no NaNs, apply the filters directly.
-    if np.isfinite(arr).all():
-        return _apply_filters_no_nan(arr, fs, filter_list)
-
-    # Create an output array initialized with NaNs, and fill in the filtered values only for finite segments.
-    out = np.full(arr.shape, np.nan, dtype=np.float64)
-    for channel in range(arr.shape[1]):
-        series = arr[:, channel]
-        finite_mask = np.isfinite(series)
-        for start, end in iter_true_runs(finite_mask):
-            segment = series[start:end].reshape(-1, 1)
-            filtered = _apply_filters_no_nan(segment, fs, filter_list).reshape(-1)
-            out[start:end, channel] = filtered
-
     return out
 
 

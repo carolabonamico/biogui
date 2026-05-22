@@ -16,13 +16,13 @@ import re
 import argparse
 import numpy as np
 from pathlib import Path
-from scipy.signal import butter, filtfilt
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.read_bio_file import read_bio_file
+from utils.filter import apply_single_filter
 
 
 # ---------------------------------------------------------------------------
@@ -71,14 +71,6 @@ def extract_timestamp(filepath: str) -> str:
     return match.group(0) if match else "unknown_time"
 
 
-def highpass_filter(data: np.ndarray, cutoff: float, fs: float, order: int = 4) -> np.ndarray:
-    """Apply a Butterworth high-pass filter to the data."""
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff / nyq
-    b, a = butter(order, normal_cutoff, btype='high', analog=False) # type: ignore
-    return filtfilt(b, a, data)
-
-
 def detect_onsets(signal: np.ndarray, fs: float, thr_absolute: float) -> tuple[np.ndarray, np.ndarray]:
     """Detect onsets in a signal using high-pass filtering, rectification, and thresholding."""
     trim_samples = int(round(TRIM_SECONDS * fs))
@@ -89,15 +81,15 @@ def detect_onsets(signal: np.ndarray, fs: float, thr_absolute: float) -> tuple[n
         clean_signal = signal
         trim_samples = 0
 
-    finite_mask = np.isfinite(clean_signal)
-    if not np.any(finite_mask):
-        return np.array([], dtype=np.int64) + trim_samples, np.array([], dtype=np.float64)
-
-    if not np.all(finite_mask):
-        sample_idx = np.arange(clean_signal.size, dtype=np.float64)
-        clean_signal = np.interp(sample_idx, sample_idx[finite_mask], clean_signal[finite_mask])
-
-    filtered = highpass_filter(clean_signal, cutoff=CUTOFF_HZ, fs=fs)
+    filtered = apply_single_filter(
+        clean_signal.reshape(-1, 1),
+        fs,
+        {
+            "type": "highpass",
+            "order": 4,
+            "cutoff": CUTOFF_HZ,
+        },
+    ).reshape(-1)
     rectified = np.abs(filtered)
 
     is_over_threshold = rectified > thr_absolute
@@ -217,24 +209,18 @@ def main() -> None:
     
     if delay_keys and rows:
         delay_matrix = np.array([[r[k] for k in delay_keys] for r in rows], dtype=np.float64)
-        
+
         # Identify outliers
         outlier_mask = np.abs(delay_matrix) > OUTLIER_THRESHOLD_MS
         outliers_count = np.sum(outlier_mask, axis=0)
-        
-        # Create a filtered matrix where absolute delays > OUTLIER_THRESHOLD_MS are set to NaN
-        filtered_matrix = np.where(outlier_mask, np.nan, delay_matrix)
 
-        finite_mask = np.isfinite(filtered_matrix)
-        finite_counts = np.sum(finite_mask, axis=0)
-        mean_delays = np.full(len(delay_keys), np.nan, dtype=np.float64)
-        std_delays = np.full(len(delay_keys), np.nan, dtype=np.float64)
+        mean_delays = np.empty(len(delay_keys), dtype=np.float64)
+        std_delays = np.empty(len(delay_keys), dtype=np.float64)
 
-        valid_stats = finite_counts > 0
-        if np.any(valid_stats):
-            valid_matrix = filtered_matrix[:, valid_stats]
-            mean_delays[valid_stats] = np.nanmean(valid_matrix, axis=0)
-            std_delays[valid_stats] = np.nanstd(valid_matrix, axis=0)
+        for idx in range(len(delay_keys)):
+            valid_values = delay_matrix[~outlier_mask[:, idx], idx]
+            mean_delays[idx] = np.mean(valid_values) if valid_values.size else np.nan
+            std_delays[idx] = np.std(valid_values) if valid_values.size else np.nan
     else:
         outliers_count = []
         mean_delays = []

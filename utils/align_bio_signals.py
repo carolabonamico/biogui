@@ -5,9 +5,9 @@ Usage:
 -----
     python align_bio_signals.py <input_file.bio> <output_directory> [--debug]
 
-The script reads signals from the specified input .bio file, aligns them based on their hardware timestamps, 
-repairs any missing packets by filling them with NaNs, and saves the aligned signals to a new .bio file in the 
-specified output directory.
+The script reads signals from the specified input .bio file, aligns them based on their hardware timestamps,
+repairs any missing packets by interpolating the missing samples, and saves the aligned signals to a new .bio file
+in the specified output directory.
 """
 
 from __future__ import annotations
@@ -15,9 +15,10 @@ from __future__ import annotations
 import argparse
 import numpy as np
 from pathlib import Path
-from read_bio_file import read_bio_file
-from write_bio_file import write_bio_file
-from check_packet_loss import compute_modulus, unwrap_signal
+from utils.read_bio_file import read_bio_file
+from utils.write_bio_file import write_bio_file
+from utils.check_packet_loss import compute_modulus, unwrap_signal
+
 
 # ----------------------------
 # Debugging utilities
@@ -207,7 +208,7 @@ def _trim_signals(signals: dict) -> tuple[dict, dict[str, int]]:
 
 
 def _repair_signals(signals: dict) -> None:
-    """Repair signals by filling in missing packets with NaNs, reconstructs the correct counter values and timestamps."""
+    """Repair signals by interpolating missing packets and reconstructing counters and timestamps."""
     counter_names = [name for name in signals if name.startswith("counter_")]
 
     for counter_name in counter_names:
@@ -234,11 +235,18 @@ def _repair_signals(signals: dict) -> None:
         payload_channels = payload.shape[1]
         samples_per_packet = int(round(signals[signal_name]["fs"] / signals[counter_name]["fs"]))
         payload_packets = payload.reshape(len(unwrapped), samples_per_packet, payload_channels)
+        flat_payload = payload_packets.reshape(len(unwrapped), -1)
+
+        packet_positions = relative_indices.astype(np.float64)
+        full_positions = np.arange(total_expected_packets, dtype=np.float64)
 
         rebuilt_counter = np.arange(total_expected_packets) % modulus
-
-        rebuilt_payload_packets = np.full((total_expected_packets, samples_per_packet, payload_channels), np.nan)
-        rebuilt_payload_packets[relative_indices] = payload_packets
+        rebuilt_payload_packets = np.empty((total_expected_packets, samples_per_packet, payload_channels), dtype=np.float64)
+        rebuilt_flat_payload = np.vstack([
+            np.interp(full_positions, packet_positions, flat_payload[:, col])
+            for col in range(flat_payload.shape[1])
+        ]).T
+        rebuilt_payload_packets[:] = rebuilt_flat_payload.reshape(total_expected_packets, samples_per_packet, payload_channels)
 
         # Reconstruct the hardware timestamps
         timestamp_raw = signals[timestamp_name]["data"].reshape(-1)
@@ -246,9 +254,7 @@ def _repair_signals(signals: dict) -> None:
         timestamp_modulus = compute_modulus(timestamp_raw, timestamp_original_dtype)
         timestamp_unwrapped = unwrap_signal(timestamp_raw, timestamp_modulus).astype(np.float64)
 
-        timestamp_step = 1_000_000.0 / float(signals[timestamp_name]["fs"])
-        rebuilt_timestamps = timestamp_unwrapped[0] + (np.arange(total_expected_packets, dtype=np.float64) * timestamp_step)
-        rebuilt_timestamps[relative_indices] = timestamp_unwrapped
+        rebuilt_timestamps = np.interp(full_positions, packet_positions, timestamp_unwrapped)
         rebuilt_timestamps_wrapped = (rebuilt_timestamps % timestamp_modulus).astype(timestamp_original_dtype)
 
         signals[counter_name]["data"] = rebuilt_counter.astype(counter_original_dtype).reshape(-1, 1)
