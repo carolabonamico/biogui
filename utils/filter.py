@@ -61,6 +61,23 @@ def _apply_filters_no_nan(data: np.ndarray, fs: float, filter_list: list[dict]) 
     return out
 
 
+def interpolate_nans_1d(channel: np.ndarray) -> np.ndarray:
+    """Fill NaN gaps in a 1D channel by linear interpolation over finite samples."""
+    interpolated = np.asarray(channel, dtype=np.float64).copy()
+    finite_mask = np.isfinite(interpolated)
+
+    if not np.any(finite_mask) or np.all(finite_mask):
+        return interpolated
+
+    sample_idx = np.arange(interpolated.size, dtype=np.float64)
+    interpolated[~finite_mask] = np.interp(
+        sample_idx[~finite_mask],
+        sample_idx[finite_mask],
+        interpolated[finite_mask],
+    )
+    return interpolated
+
+
 def iter_true_runs(mask: np.ndarray):
     """Yield start and end indices of consecutive True runs in a boolean mask."""
     start = None

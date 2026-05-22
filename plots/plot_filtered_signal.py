@@ -17,7 +17,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
     
 from utils.read_bio_file import read_bio_file
-from utils.filter import apply_filters_nan, load_signal_filters, iter_true_runs
+from utils.filter import apply_filters_nan, interpolate_nans_1d, load_signal_filters, iter_true_runs
+from utils.compute_peak_delay import (highpass_filter, TRIM_SECONDS, CUTOFF_HZ, SIGNAL_CONFIG)
 
 CONFIG_PATH = Path(__file__).parent/"config"/"plot_config.json"
 
@@ -61,9 +62,11 @@ def extract_time_axis(
     n_samp = sig_data["data"].shape[0]
 
     if ts_entry is not None:
+        # print(f"[timestamp] using hardware timestamps (fs={ts_entry['fs']} Hz, {len(np.asarray(ts_entry['data']).ravel())} packets)")
         ts_arr = np.asarray(ts_entry["data"]).ravel()
         t = expand_timestamps_to_samples(ts_arr, sig_data["fs"], ts_entry["fs"]) / 1_000_000.0
     else:
+        # print(f"[timestamp] using synthetic timestamps (fs={sig_data['fs']} Hz, {n_samp} samples)")
         t = np.arange(n_samp, dtype=np.float64) / sig_data["fs"]
 
     min_len = min(n_samp, len(t))
@@ -146,7 +149,7 @@ def color_nan_regions(ax, t: np.ndarray, data: np.ndarray) -> None:
 
 
 def update_x_ticks(ax) -> None:
-    """Set adaptive x ticks"""
+    """Set adaptive x ticks."""
     xmin, xmax = ax.get_xlim()
     span = max(float(xmax - xmin), 1e-12)
     base = 0.10  # 100 ms
@@ -197,23 +200,42 @@ def plot_signal_on_axis(
     ax.grid(True, linestyle="-", color="#e0e0e0", linewidth=0.5, alpha=0.7)
 
 
-# --------------------------------------------
-# Main
-# --------------------------------------------
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Plot signal from a .bio file.")
-    parser.add_argument("file_path", help="Path to the .bio file")
-    parser.add_argument("--filter", action="store_true", help="Apply filtering to the signals")
-    args = parser.parse_args()
-
-    file_path = args.file_path
-    filename = Path(file_path).name
-    signal_filters = load_signal_filters(CONFIG_PATH)
+def load_and_prepare(file_path: str, signal_filters: dict, apply_filter: bool, preprocess_for_alignment: bool) -> dict:
+    """Read a .bio file, apply shared alignment preprocessing (if requested), then optional filters."""
     signals = read_bio_file(file_path)
 
-    if args.filter:
+    if preprocess_for_alignment:
+        
+        # Trimming to remove initial artifacts
+        for sig_name, sig_data in signals.items():
+            fs = float(sig_data["fs"])
+            trim_samples = int(round(TRIM_SECONDS * fs))
+            data = np.asarray(sig_data["data"])
+            
+            if data.shape[0] > trim_samples:
+                sig_data["data"] = data[trim_samples:] if data.ndim == 1 else data[trim_samples:, :]
+        
+        # HPF + Rectification
+        target_signals = set(SIGNAL_CONFIG.keys())
+
+        for sig_name, sig_data in signals.items():
+            if sig_name not in target_signals:
+                continue
+            data = np.asarray(sig_data["data"])
+            if data.ndim == 2 and data.size > 0:
+                print(f"[{sig_name}] Applying {CUTOFF_HZ}Hz HPF + Rectification to mirror delay pipeline")
+                fs = float(sig_data["fs"])
+                
+                processed_channels = []
+                for ch in range(data.shape[1]):
+                    ch_data = interpolate_nans_1d(data[:, ch])
+                    ch_filtered = highpass_filter(ch_data, cutoff=CUTOFF_HZ, fs=fs)
+                    ch_rectified = np.abs(ch_filtered)
+                    processed_channels.append(ch_rectified)
+                
+                sig_data["data"] = np.column_stack(processed_channels)
+
+    if apply_filter:
         for sig_name, sig_cfg in signal_filters.items():
             filter_list = sig_cfg.get("filters")
             if sig_name in signals and filter_list:
@@ -224,50 +246,112 @@ def main():
                 )
 
     apply_channel_exclusions(signals, signal_filters)
+    return signals
 
-    # Plot each signal individually
-    for sig_name, sig_data in signals.items():
-        fig, ax = plt.subplots(figsize=(16, 6), layout="constrained")
-        fig.suptitle(filename, fontsize=12)
-        ts_entry = signals.get(f"timestamp_{sig_name}")
-        t, min_len = extract_time_axis(sig_data, ts_entry)
-        plot_signal_on_axis(ax, sig_name, sig_data, t, min_len)
-        if ts_entry is None:
-            ax.callbacks.connect("xlim_changed", update_x_ticks)
-            update_x_ticks(ax)
-        ax.set_xlabel("Time [s]")
 
-    # Additional plot: top = base signal, bottom = matching mic_<base> signal
-    for mic_name, mic_data in signals.items():
-        if not mic_name.startswith("mic_"):
-            continue
+# --------------------------------------------
+# Main
+# --------------------------------------------
 
-        base_name = mic_name[4:]
-        if base_name not in signals:
-            continue
 
-        base_data = signals[base_name]
-        fig, (ax_top, ax_bottom) = plt.subplots(
-            2, 1, figsize=(16, 8), layout="constrained", sharex=True,
-        )
-        fig.suptitle(filename, fontsize=12)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Plot signal from one or two .bio files.")
+    parser.add_argument("file_paths", nargs="+", help="Path(s) to the .bio file(s)")
+    parser.add_argument("--filter", action="store_true", help="Apply filtering to the signals")
+    parser.add_argument(
+        "--preprocess-for-alignment",
+        action="store_true",
+        help="Apply exactly the same trimming and HPF+Rectification pipeline used by compute_peak_delay only to the configured signals",
+    )
+    args = parser.parse_args()
 
-        ts_base = signals.get(f"timestamp_{base_name}")
-        t_base, len_base = extract_time_axis(base_data, ts_base)
-        plot_signal_on_axis(ax_top, base_name, base_data, t_base, len_base)
+    signal_filters = load_signal_filters(CONFIG_PATH)
 
-        ts_mic = signals.get(f"timestamp_{mic_name}")
-        t_mic, len_mic = extract_time_axis(mic_data, ts_mic)
-        plot_signal_on_axis(ax_bottom, mic_name, mic_data, t_mic, len_mic)
+    if len(args.file_paths) == 2:
+        signals_list = [
+            load_and_prepare(fp, signal_filters, args.filter, args.preprocess_for_alignment)
+            for fp in args.file_paths
+        ]
+        filenames = [Path(fp).name for fp in args.file_paths]
 
-        if ts_base is None:
-            ax_top.callbacks.connect("xlim_changed", update_x_ticks)
-            update_x_ticks(ax_top)
-        if ts_mic is None:
-            ax_bottom.callbacks.connect("xlim_changed", update_x_ticks)
-            update_x_ticks(ax_bottom)
+        fig, axes = plt.subplots(4, 1, figsize=(16, 16), layout="constrained", sharex=True)
+        fig.suptitle(f"{filenames[0]}  |  {filenames[1]}", fontsize=12)
 
-        ax_bottom.set_xlabel("Time [s]")
+        ax_slots = list(axes)
+        slot = 0
+
+        for signals, filename in zip(signals_list, filenames):
+            for mic_name, mic_data in signals.items():
+                if not mic_name.startswith("mic_"):
+                    continue
+                base_name = mic_name[4:]
+                if base_name not in signals:
+                    continue
+
+                base_data = signals[base_name]
+
+                t_base, len_base = extract_time_axis(base_data, signals.get(f"timestamp_{base_name}"))
+                ax_base = ax_slots[slot]
+                ax_base.set_title(f"[{filename}] {base_name}")
+                plot_signal_on_axis(ax_base, base_name, base_data, t_base, len_base)
+
+                t_mic, len_mic = extract_time_axis(mic_data, signals.get(f"timestamp_{mic_name}"))
+                ax_mic = ax_slots[slot + 1]
+                ax_mic.set_title(f"[{filename}] {mic_name}")
+                plot_signal_on_axis(ax_mic, mic_name, mic_data, t_mic, len_mic)
+
+                slot += 2
+                break
+
+        axes[-1].set_xlabel("Time [s]")
+        axes[0].callbacks.connect("xlim_changed", update_x_ticks)
+        update_x_ticks(axes[0])
+
+    else:
+        file_path = args.file_paths[0]
+        filename = Path(file_path).name
+        signals = load_and_prepare(file_path, signal_filters, args.filter, args.preprocess_for_alignment)
+
+        for sig_name, sig_data in signals.items():
+            fig, ax = plt.subplots(figsize=(16, 6), layout="constrained")
+            fig.suptitle(filename, fontsize=12)
+            ts_entry = signals.get(f"timestamp_{sig_name}")
+            t, min_len = extract_time_axis(sig_data, ts_entry)
+            plot_signal_on_axis(ax, sig_name, sig_data, t, min_len)
+            if ts_entry is None:
+                ax.callbacks.connect("xlim_changed", update_x_ticks)
+                update_x_ticks(ax)
+            ax.set_xlabel("Time [s]")
+
+        for mic_name, mic_data in signals.items():
+            if not mic_name.startswith("mic_"):
+                continue
+            base_name = mic_name[4:]
+            if base_name not in signals:
+                continue
+
+            base_data = signals[base_name]
+            fig, (ax_top, ax_bottom) = plt.subplots(
+                2, 1, figsize=(16, 8), layout="constrained", sharex=True,
+            )
+            fig.suptitle(filename, fontsize=12)
+
+            ts_base = signals.get(f"timestamp_{base_name}")
+            t_base, len_base = extract_time_axis(base_data, ts_base)
+            plot_signal_on_axis(ax_top, base_name, base_data, t_base, len_base)
+
+            ts_mic = signals.get(f"timestamp_{mic_name}")
+            t_mic, len_mic = extract_time_axis(mic_data, ts_mic)
+            plot_signal_on_axis(ax_bottom, mic_name, mic_data, t_mic, len_mic)
+
+            if ts_base is None:
+                ax_top.callbacks.connect("xlim_changed", update_x_ticks)
+                update_x_ticks(ax_top)
+            if ts_mic is None:
+                ax_bottom.callbacks.connect("xlim_changed", update_x_ticks)
+                update_x_ticks(ax_bottom)
+
+            ax_bottom.set_xlabel("Time [s]")
 
     plt.show()
 
