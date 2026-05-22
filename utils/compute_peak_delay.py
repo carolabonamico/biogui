@@ -348,6 +348,11 @@ def main() -> None:
     
     with output_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
+
+        w.writerow(["Analyzed files"])
+        for file_path in args.files:
+            w.writerow([Path(file_path).name])
+        w.writerow([])
         
         csv_headers = ["pair_id"] + [f"{s}_s" for s in ordered_signals] + [f"delay_{a}_{b}_ms" for a, b in valid_pairs]
         w.writerow(csv_headers)
