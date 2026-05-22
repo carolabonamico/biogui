@@ -16,13 +16,14 @@ import re
 import argparse
 import numpy as np
 from pathlib import Path
-from scipy.signal import butter, filtfilt
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from utils.read_bio_file import read_bio_file
+from utils.check_packet_loss import calculate_packet_loss
+from utils.filter import apply_filters_nan
 
 
 # ---------------------------------------------------------------------------
@@ -30,7 +31,7 @@ from utils.read_bio_file import read_bio_file
 # ---------------------------------------------------------------------------
 
 
-OUTPUT_DIR = Path("./analysis_results")
+OUTPUT_DIR = Path("./delay_analysis_results")
 
 SIGNAL_CONFIG = {
     "emg":     {"channel": 0, "threshold": 10000.0},
@@ -52,6 +53,7 @@ MIN_DISTANCE_RATIO = 0.8    # 80 % of the period
 
 MAX_DELAY_S = 0.200
 CUTOFF_HZ = 20.0
+HIGHPASS_FILTERS = [{"type": "highpass", "order": 4, "cutoff": CUTOFF_HZ}]
 
 # Use half a period to group peaks of the same event
 CLUSTER_MARGIN_S = PERIOD_S / 2.0  
@@ -71,12 +73,24 @@ def extract_timestamp(filepath: str) -> str:
     return match.group(0) if match else "unknown_time"
 
 
-def highpass_filter(data: np.ndarray, cutoff: float, fs: float, order: int = 4) -> np.ndarray:
-    """Apply a Butterworth high-pass filter to the data."""
-    nyq = 0.5 * fs
-    normal_cutoff = cutoff / nyq
-    b, a = butter(order, normal_cutoff, btype='high', analog=False) # type: ignore
-    return filtfilt(b, a, data)
+def summarize_packet_loss(signals: dict) -> dict[str, int]:
+    """Return lost packet counts per known signal name using counter signals."""
+    packet_loss: dict[str, int] = {}
+
+    for counter_name in sorted(name for name in signals if name.startswith("counter_")):
+        signal_name = counter_name.replace("counter_", "", 1)
+        if signal_name not in SIGNAL_CONFIG:
+            continue
+
+        counter_signal = signals[counter_name]
+        lost, _, _ = calculate_packet_loss(
+            counter_signal["data"],
+            counter_signal["data"].dtype,
+            signal_name,
+        )
+        packet_loss[signal_name] = packet_loss.get(signal_name, 0) + lost
+
+    return packet_loss
 
 
 def detect_onsets(signal: np.ndarray, fs: float, thr_absolute: float) -> tuple[np.ndarray, np.ndarray]:
@@ -93,24 +107,23 @@ def detect_onsets(signal: np.ndarray, fs: float, thr_absolute: float) -> tuple[n
     if not np.any(finite_mask):
         return np.array([], dtype=np.int64) + trim_samples, np.array([], dtype=np.float64)
 
-    if not np.all(finite_mask):
-        sample_idx = np.arange(clean_signal.size, dtype=np.float64)
-        clean_signal = np.interp(sample_idx, sample_idx[finite_mask], clean_signal[finite_mask])
-
-    filtered = highpass_filter(clean_signal, cutoff=CUTOFF_HZ, fs=fs)
+    filtered = apply_filters_nan(clean_signal.reshape(-1, 1), fs, HIGHPASS_FILTERS).reshape(-1)
     rectified = np.abs(filtered)
-
-    is_over_threshold = rectified > thr_absolute
-    crossings = np.where((is_over_threshold[:-1] == False) & (is_over_threshold[1:] == True))[0]
 
     dist = int(round(PERIOD_S * MIN_DISTANCE_RATIO * fs))
     onsets = []
     last_onset = -dist  
 
-    for crossing in crossings:
-        if crossing - last_onset >= dist:
-            onsets.append(crossing)
-            last_onset = crossing   
+    finite_edges = np.diff(np.concatenate(([False], np.isfinite(rectified), [False]))).nonzero()[0]
+    for start, end in zip(finite_edges[::2], finite_edges[1::2]):
+        segment = rectified[start:end]
+        is_over_threshold = segment > thr_absolute
+        crossings = np.where((~is_over_threshold[:-1]) & (is_over_threshold[1:]))[0] + start
+
+        for crossing in crossings:
+            if crossing - last_onset >= dist:
+                onsets.append(crossing)
+                last_onset = crossing   
 
     onsets_absolute = np.array(onsets) + trim_samples
     return onsets_absolute, rectified
@@ -127,6 +140,7 @@ def main() -> None:
     args = parser.parse_args()
 
     global_raw_signals = {}
+    packet_loss_by_signal: dict[str, int] = {}
     
     print(f"\n{'-'*80}\nReading and aggregating files\n{'-'*80}")
     for bio_file_str in args.files:
@@ -134,6 +148,10 @@ def main() -> None:
         try:
             signals = read_bio_file(str(bio_file))
             print(f"File '{bio_file.name}' read. Signals found: {list(signals.keys())}")
+
+            file_packet_loss = summarize_packet_loss(signals)
+            for signal_name, lost_packets in file_packet_loss.items():
+                packet_loss_by_signal[signal_name] = packet_loss_by_signal.get(signal_name, 0) + lost_packets
             
             for sig_name, sig_data in signals.items():
                 if sig_name in SIGNAL_CONFIG:
@@ -144,6 +162,19 @@ def main() -> None:
     if not global_raw_signals:
         print("\nNo useful signals found in the provided files.")
         return
+
+    print(f"\n{'-'*80}\nPacket Loss\n{'-'*80}")
+    if packet_loss_by_signal:
+        signals_with_loss = [sig for sig, lost in packet_loss_by_signal.items() if lost > 0]
+        for sig_name in [s for s in ["emg", "mic_emg", "eeg", "mic_eeg"] if s in packet_loss_by_signal]:
+            print(f"[{sig_name}] lost packets: {packet_loss_by_signal[sig_name]}")
+
+        if signals_with_loss:
+            print(f"Signals with packet loss: {', '.join(signals_with_loss)}")
+        else:
+            print("No packet loss detected in the available counter signals.")
+    else:
+        print("No counter signals found, so packet loss could not be computed.")
 
     # Determine which signals are actually present to build columns
     found_signals_set = set(global_raw_signals.keys())
@@ -342,6 +373,11 @@ def main() -> None:
             std_row = [f"Std (ms) (<={OUTLIER_THRESHOLD_MS:g}ms)"] + [""] * len(ordered_signals)
             std_row.extend([f"{s:.3f}" if not np.isnan(s) else "" for s in std_delays])
             w.writerow(std_row)
+
+        w.writerow([])
+        w.writerow(["Packet loss summary"])
+        for sig_name in [s for s in ["emg", "mic_emg", "eeg", "mic_eeg"] if s in packet_loss_by_signal]:
+            w.writerow([f"Lost packets ({sig_name})", packet_loss_by_signal[sig_name]])
 
     print(f"\n[SAVED]: {output_csv}")
 

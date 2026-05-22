@@ -17,8 +17,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
     
 from utils.read_bio_file import read_bio_file
-from utils.filter import apply_filters_nan, interpolate_nans_1d, load_signal_filters, iter_true_runs
-from utils.compute_peak_delay import (highpass_filter, TRIM_SECONDS, CUTOFF_HZ, SIGNAL_CONFIG)
+from utils.filter import apply_filters_nan, load_signal_filters, iter_true_runs
+from utils.compute_peak_delay import SIGNAL_CONFIG, HIGHPASS_FILTERS, CUTOFF_HZ, TRIM_SECONDS
 
 CONFIG_PATH = Path(__file__).parent/"config"/"plot_config.json"
 
@@ -225,15 +225,13 @@ def load_and_prepare(file_path: str, signal_filters: dict, apply_filter: bool, p
             if data.ndim == 2 and data.size > 0:
                 print(f"[{sig_name}] Applying {CUTOFF_HZ}Hz HPF + Rectification to mirror delay pipeline")
                 fs = float(sig_data["fs"])
-                
-                processed_channels = []
-                for ch in range(data.shape[1]):
-                    ch_data = interpolate_nans_1d(data[:, ch])
-                    ch_filtered = highpass_filter(ch_data, cutoff=CUTOFF_HZ, fs=fs)
-                    ch_rectified = np.abs(ch_filtered)
-                    processed_channels.append(ch_rectified)
-                
-                sig_data["data"] = np.column_stack(processed_channels)
+                sig_data["data"] = np.abs(
+                    apply_filters_nan(
+                        data=data,
+                        fs=fs,
+                        filter_list=HIGHPASS_FILTERS,
+                    )
+                )
 
     if apply_filter:
         for sig_name, sig_cfg in signal_filters.items():
