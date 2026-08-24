@@ -1,6 +1,8 @@
-# biogui
+# BioGUI
 
-Modular PySide6 GUI for acquiring and visualizing bio-signals from different sources.
+This repository is a fork of [giovannipollo/biogui](https://github.com/giovannipollo/biogui), which is in turn a fork of the original [BioGUI project](https://github.com/pulp-bio/biogui). It is used to acquire data for the data collection of the master's thesis *From Biosignals to Words: Exploiting Novel Deep Learning Architectures for Speech Understanding* (ETH Zurich, 2026).
+
+The original project is a modular PySide6 GUI for acquiring and visualizing bio-signals from different sources.
 
 ## Usage
 
