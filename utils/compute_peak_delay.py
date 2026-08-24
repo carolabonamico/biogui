@@ -31,7 +31,7 @@ from utils.filter import apply_filters_nan
 # ---------------------------------------------------------------------------
 
 
-OUTPUT_DIR = Path("./delay_analysis_results")
+OUTPUT_DIR = Path("./delay_analysis_results_b4")
 
 SIGNAL_CONFIG = {
     "emg":     {"channel": 0, "threshold": 10000.0},
